@@ -41,7 +41,7 @@ export default function LoginPage() {
       if (data?.session) {
         console.log("Login bem-sucedido! Sessão criada para:", data.user?.email);
         console.log("Redirecionando para a Home...");
-        router.push('/'); 
+        window.location.href = '/'; 
       } else {
         console.warn("Login concluído, mas nenhuma sessão foi retornada.");
         setLoading(false);

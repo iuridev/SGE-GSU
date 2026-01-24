@@ -3,14 +3,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  
-  // LOG 1: Verificar se o middleware está rodando e qual rota interceptou
-  console.log(`[MIDDLEWARE] Processando rota: ${path}`);
+  console.log(`[MIDDLEWARE] Rota detectada: ${path}`);
 
   let response = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
+    request: { headers: request.headers },
   })
 
   const supabase = createServerClient(
@@ -39,26 +35,35 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // LOG 2: Usar getUser() para validar a sessão de forma segura no servidor
-  const { data: { user }, error } = await supabase.auth.getUser()
-
-  if (error) {
-    console.log("[MIDDLEWARE] Sem usuário autenticado ou sessão expirada.");
+  // LOG: Verificando se as chaves existem (sem exibir o valor real por segurança)
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    console.error("[MIDDLEWARE] ERRO: NEXT_PUBLIC_SUPABASE_URL não configurada na Vercel!");
   }
 
-  // REGRA DE PROTEÇÃO 1: Se não estiver logado, obriga a ir para /login
+  // IMPORTANTE: Para o Middleware, usamos getSession primeiro. 
+  // Se falhar, tentamos getUser. Isso evita o travamento que você viu.
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
+
+  if (user) {
+    console.log(`[MIDDLEWARE] Usuário identificado: ${user.email}`);
+  } else {
+    console.log("[MIDDLEWARE] Nenhum usuário encontrado nos cookies.");
+  }
+
+  // REGRA 1: Proteger rotas internas
   if (!user && !path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Usuário não logado. Redirecionando para /login");
+    console.log("[MIDDLEWARE] Acesso negado. Redirecionando -> /login");
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  // REGRA DE PROTEÇÃO 2: Se já estiver logado, não deixa voltar para a tela de login
+  // REGRA 2: Evitar que logados fiquem na tela de login
   if (user && path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Usuário já autenticado. Redirecionando para a Home (/)");
+    console.log("[MIDDLEWARE] Já logado. Redirecionando -> Home");
     return NextResponse.redirect(new URL('/', request.url));
   }
 
-  console.log("[MIDDLEWARE] Acesso autorizado.");
+  console.log("[MIDDLEWARE] Requisição autorizada.");
   return response
 }
 
