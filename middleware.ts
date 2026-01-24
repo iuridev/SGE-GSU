@@ -8,7 +8,6 @@ export async function middleware(request: NextRequest) {
     },
   })
 
-  // Cria o cliente do Supabase para o Middleware (padrão SSR)
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -26,23 +25,23 @@ export async function middleware(request: NextRequest) {
           })
           response.cookies.set({ name, value, ...options })
         },
+        // AQUI ESTAVA O ERRO: Adicionamos o valor vazio '' para deletar o cookie
         remove(name: string, options: CookieOptions) {
-          request.cookies.set({ name, value, ...options })
+          request.cookies.set({ name, value: '', ...options })
           response = NextResponse.next({
             request: {
               headers: request.headers,
             },
           })
-          response.cookies.delete({ name, ...options })
+          response.cookies.set({ name, value: '', ...options })
         },
       },
     }
   )
 
-  // Verifica a sessão
   const { data: { session } } = await supabase.auth.getSession()
 
-  // Se não estiver logado e tentar acessar a raiz, manda para o login
+  // Se não estiver logado e não for a página de login, redireciona
   if (!session && !request.nextUrl.pathname.startsWith('/login')) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
