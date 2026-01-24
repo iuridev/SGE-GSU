@@ -26,16 +26,16 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Verifica sessão no servidor
+  // Verifica a identidade do usuário de forma segura no servidor
   const { data: { user } } = await supabase.auth.getUser()
   const isLoginPage = request.nextUrl.pathname.startsWith('/login')
 
-  // REDIRECIONAMENTO: Se não houver usuário, manda para o login
+  // Se não houver usuário e não estiver no login, redireciona
   if (!user && !isLoginPage) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Se já houver usuário e ele tentar acessar o login, manda para a home
+  // Se já estiver logado e tentar acessar o login, manda para a home
   if (user && isLoginPage) {
     return NextResponse.redirect(new URL('/', request.url))
   }
