@@ -3,11 +3,14 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  console.log(`[MIDDLEWARE] Rota detectada: ${path}`);
-
+  
+  // Criamos uma resposta base
   let response = NextResponse.next({
     request: { headers: request.headers },
   })
+
+  // LOG 1: Monitorar a rota no servidor da Vercel
+  console.log(`[MIDDLEWARE] Rota: ${path}`);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,6 +21,7 @@ export async function middleware(request: NextRequest) {
           return request.cookies.get(name)?.value
         },
         set(name: string, value: string, options: CookieOptions) {
+          // Atualiza os cookies na requisição e na resposta simultaneamente
           request.cookies.set({ name, value, ...options })
           response = NextResponse.next({
             request: { headers: request.headers },
@@ -35,35 +39,28 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // LOG: Verificando se as chaves existem (sem exibir o valor real por segurança)
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    console.error("[MIDDLEWARE] ERRO: NEXT_PUBLIC_SUPABASE_URL não configurada na Vercel!");
-  }
+  // LOG 2: Verificar a sessão
+  // Usamos getSession aqui porque ele é mais rápido para o Middleware do Next.js
+  const { data: { session } } = await supabase.auth.getSession()
 
-  // IMPORTANTE: Para o Middleware, usamos getSession primeiro. 
-  // Se falhar, tentamos getUser. Isso evita o travamento que você viu.
-  const { data: { session } } = await supabase.auth.getSession();
-  const user = session?.user;
-
-  if (user) {
-    console.log(`[MIDDLEWARE] Usuário identificado: ${user.email}`);
+  if (session) {
+    console.log(`[MIDDLEWARE] Sessão ativa para: ${session.user.email}`);
   } else {
-    console.log("[MIDDLEWARE] Nenhum usuário encontrado nos cookies.");
+    console.log("[MIDDLEWARE] Nenhuma sessão encontrada nos cookies.");
   }
 
-  // REGRA 1: Proteger rotas internas
-  if (!user && !path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Acesso negado. Redirecionando -> /login");
-    return NextResponse.redirect(new URL('/login', request.url));
+  // REGRA 1: Se NÃO estiver logado e tentar acessar a Home ou outras páginas
+  if (!session && path !== '/login') {
+    console.log("[MIDDLEWARE] Redirecionando para LOGIN (Sem Sessão)");
+    return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // REGRA 2: Evitar que logados fiquem na tela de login
-  if (user && path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Já logado. Redirecionando -> Home");
-    return NextResponse.redirect(new URL('/', request.url));
+  // REGRA 2: Se JÁ estiver logado e tentar acessar o /login, manda para a Home
+  if (session && path === '/login') {
+    console.log("[MIDDLEWARE] Redirecionando para HOME (Já Logado)");
+    return NextResponse.redirect(new URL('/', request.url))
   }
 
-  console.log("[MIDDLEWARE] Requisição autorizada.");
   return response
 }
 
