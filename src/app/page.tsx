@@ -26,7 +26,7 @@ export default function UserManagement() {
   useEffect(() => {
     const checkUserAndFetchData = async () => {
       setLoadingUser(true); // Começa a mostrar a tela de carregamento
-      
+
       // 1. Pede ao Supabase a sessão do usuário atual
       const { data: { session } } = await supabase.auth.getSession();
 
@@ -35,6 +35,12 @@ export default function UserManagement() {
         router.push('/login');
         return;
       }
+
+      // botão logout
+      const handleLogout = async () => {
+        await supabase.auth.signOut(); // Limpa a sessão no Supabase
+        router.push('/login'); // Redireciona para a tela de login
+      };
 
       // 2. Busca na tabela 'usuarios' o perfil do e-mail que está logado
       const { data: userData } = await supabase
@@ -46,7 +52,7 @@ export default function UserManagement() {
       // Salva no estado se o usuário é Administrador (Regional)
       setUsuarioLogado({
         email: session.user.email,
-        is_admin: userData?.perfil === 'Regional' 
+        is_admin: userData?.perfil === 'Regional'
       });
 
       // 3. Busca a lista de todos os usuários para mostrar na tabela
@@ -114,14 +120,14 @@ export default function UserManagement() {
   // --- INTERFACE (HTML/JSX) ---
   return (
     <div className="flex h-screen w-full bg-slate-50 text-slate-900 overflow-hidden">
-      
+
       {/* SIDEBAR (Barra Lateral) */}
       <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
         <div className="flex items-center gap-2 mb-10 border-b border-slate-700 pb-4">
           <ShieldCheck className="text-blue-400" />
           <span className="text-xl font-bold tracking-tight">SGE-GSU</span>
         </div>
-        
+
         <nav className="space-y-4 flex-1">
           <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium">
             <Users size={20} /> <span>Usuários</span>
@@ -129,7 +135,7 @@ export default function UserManagement() {
         </nav>
 
         {/* Botão de Sair */}
-        <button 
+        <button
           onClick={handleLogout}
           className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition"
         >
@@ -175,16 +181,15 @@ export default function UserManagement() {
                   <td className="px-8 py-6 text-slate-500">{user.email}</td>
                   <td className="px-8 py-6">
                     {/* Estilo diferente baseado no perfil */}
-                    <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${
-                      user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'
-                    }`}>
+                    <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'
+                      }`}>
                       {user.perfil}
                     </span>
                   </td>
                   <td className="px-8 py-6 text-right">
-                    <button 
+                    <button
                       onClick={async () => {
-                        if(confirm("Deseja realmente excluir este usuário?")) {
+                        if (confirm("Deseja realmente excluir este usuário?")) {
                           await supabase.from('usuarios').delete().eq('id', user.id);
                           fetchUsuarios(); // Atualiza a lista após deletar
                         }
@@ -215,7 +220,7 @@ export default function UserManagement() {
                 <form className="space-y-4" onSubmit={handleSave}>
                   <input type="text" placeholder="Nome" value={nome} onChange={(e) => setNome(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-slate-200 outline-none" required />
                   <input type="email" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-slate-200 outline-none" required />
-                  
+
                   {/* Grid para senhas lado a lado */}
                   <div className="grid grid-cols-2 gap-4">
                     <input type="password" placeholder="Senha" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-slate-200 outline-none" required />
