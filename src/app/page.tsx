@@ -5,6 +5,9 @@ import { supabase } from './lib/supabase'; // Importando a conexão que criamos
 
 export default function UserManagement() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const [usuarioLogado, setUsuarioLogado] = useState({ is_admin: true }); // provisotiro até sistema de login funcionar
+
   const [loading, setLoading] = useState(false);
   const [usuarios, setUsuarios] = useState<any[]>([]); // Lista de usuários do banco
 
@@ -22,7 +25,7 @@ export default function UserManagement() {
       .from('usuarios')
       .select('*')
       .order('created_at', { ascending: false });
-    
+
     if (data) setUsuarios(data);
   };
 
@@ -76,16 +79,19 @@ export default function UserManagement() {
 
       <main className="flex-1 p-10 overflow-auto bg-gray-50">
         <header className="flex justify-between items-end mb-10">
-          <div>
-            <h1 className="text-4xl font-black text-slate-900 uppercase">Gestão de Usuários</h1>
-            <p className="text-slate-500 mt-2 font-medium">Dados vindos direto do Supabase.</p>
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-2xl font-bold">Gestão de Usuários</h1>
+
+            {/* login 24-01-2026*/}
+            {usuarioLogado?.is_admin && (
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition"
+              >
+                Novo Usuário
+              </button>
+            )}
           </div>
-          <button 
-            onClick={() => { setError(""); setIsModalOpen(true); }}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold shadow-lg flex items-center gap-2 transition-all transform hover:scale-105"
-          >
-            <Plus size={20} /> Novo Usuário
-          </button>
         </header>
 
         {/* TABELA DINÂMICA */}
@@ -105,9 +111,8 @@ export default function UserManagement() {
                   <td className="px-8 py-6 text-slate-700 font-bold">{user.nome}</td>
                   <td className="px-8 py-6 text-slate-500">{user.email}</td>
                   <td className="px-8 py-6">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${
-                      user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'
-                    }`}>
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'
+                      }`}>
                       {user.perfil}
                     </span>
                   </td>
@@ -129,11 +134,11 @@ export default function UserManagement() {
             <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden">
               <div className="p-10">
                 <h2 className="text-2xl font-black text-slate-900 mb-8">Novo Cadastro</h2>
-                
+
                 <form className="space-y-4" onSubmit={handleSave}>
                   <input type="text" placeholder="Nome" value={nome} onChange={(e) => setNome(e.target.value)} className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none bg-slate-50" required />
                   <input type="email" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none bg-slate-50" required />
-                  
+
                   <div className="grid grid-cols-2 gap-4">
                     <input type="password" placeholder="Senha" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none bg-slate-50" required />
                     <input type="password" placeholder="Confirmar" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none bg-slate-50" required />
