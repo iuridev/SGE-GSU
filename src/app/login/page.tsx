@@ -16,16 +16,45 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    // LOG 1: Início do processo
+    console.log("--- INICIANDO TENTATIVA DE LOGIN ---");
+    console.log("E-mail digitado:", email);
 
-    if (error) {
-      setError("E-mail ou senha incorretos.");
+    try {
+      // LOG 2: Chamando o Supabase
+      console.log("Chamando supabase.auth.signInWithPassword...");
+      
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        // LOG 3: Erro retornado pelo Supabase (ex: senha errada)
+        console.error("Erro retornado pelo Supabase:", authError.status, authError.message);
+        setError("E-mail ou senha incorretos.");
+        setLoading(false);
+        return;
+      }
+
+      // LOG 4: Sucesso na autenticação
+      if (data?.session) {
+        console.log("Login bem-sucedido! Sessão criada para:", data.user?.email);
+        console.log("Redirecionando para a Home...");
+        router.push('/'); 
+      } else {
+        console.warn("Login concluído, mas nenhuma sessão foi retornada.");
+        setLoading(false);
+      }
+
+    } catch (err: any) {
+      // LOG 5: Erro crítico (Geralmente variáveis de ambiente faltando)
+      console.error("ERRO CRÍTICO NO LOGIN:");
+      console.error("Mensagem do erro:", err.message);
+      console.error("Stack trace:", err);
+      
+      setError("Erro de conexão. Verifique as chaves do banco.");
       setLoading(false);
-    } else {
-      router.push('/'); // Manda para a tela de gestão após logar
     }
   };
 
@@ -58,7 +87,11 @@ export default function LoginPage() {
             required 
           />
           
-          {error && <div className="text-red-600 text-xs font-bold uppercase text-center">{error}</div>}
+          {error && (
+            <div className="bg-red-50 p-3 rounded-xl border border-red-100">
+                <div className="text-red-600 text-[10px] font-black uppercase text-center">{error}</div>
+            </div>
+          )}
 
           <button 
             type="submit" 
@@ -68,6 +101,11 @@ export default function LoginPage() {
             {loading ? <Loader2 className="animate-spin" /> : 'Entrar no Sistema'}
           </button>
         </form>
+
+        {/* LOG DE STATUS NA TELA (Opcional, ajuda a ver se o código travou) */}
+        <p className="mt-4 text-[10px] text-center text-slate-300 uppercase font-bold">
+            Status: {loading ? 'Conectando ao banco...' : 'Aguardando login'}
+        </p>
       </div>
     </div>
   );
