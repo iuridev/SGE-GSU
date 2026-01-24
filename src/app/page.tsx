@@ -1,21 +1,22 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Users, ShieldCheck, Plus, Loader2, LogOut, X } from 'lucide-react';
-import { supabase } from './lib/supabase'; // Certifique-se que o caminho está correto
+import { Users, ShieldCheck, Plus, Loader2, LogOut, X, Trash2 } from 'lucide-react';
+// Ajustado para o caminho que funcionou no seu projeto
+import { supabase } from './lib/supabase'; 
 import { useRouter } from 'next/navigation';
 
 export default function UserManagement() {
   const router = useRouter();
 
-  // --- ESTADOS ---
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  // --- ESTADOS DO SISTEMA ---
   const [loadingUser, setLoadingUser] = useState(true);
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [usuarioLogado, setUsuarioLogado] = useState<any>(null);
 
-  // --- ESTADOS DO FORMULÁRIO ---
+  // --- ESTADOS DO MODAL E FORMULÁRIO ---
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [loadingAction, setLoadingAction] = useState(false);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [perfil, setPerfil] = useState('Escola');
@@ -23,36 +24,31 @@ export default function UserManagement() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
 
-  // --- EFEITO DE CARREGAMENTO INICIAL ---
+  // --- CARREGAMENTO INICIAL (SESSÃO E DADOS) ---
   useEffect(() => {
     const initPage = async () => {
       setLoadingUser(true);
       
-      // 1. Pegamos o usuário logado do Supabase Auth
+      // 1. Busca o usuário autenticado
       const { data: { user } } = await supabase.auth.getUser();
 
-      // Se não houver usuário, o Middleware já deveria ter barrado.
-      // Mas por segurança, se chegar aqui sem usuário, apenas paramos o loading.
-      if (!user) {
-        setLoadingUser(false);
-        return; 
+      if (user) {
+        // 2. Busca o perfil na tabela 'usuarios' do banco de dados
+        const { data: profile } = await supabase
+          .from('usuarios')
+          .select('perfil')
+          .eq('email', user.email)
+          .single();
+
+        setUsuarioLogado({
+          email: user.email,
+          // Define se é admin baseado no perfil 'Regional'
+          is_admin: profile?.perfil === 'Regional'
+        });
+
+        // 3. Carrega a lista de usuários cadastrados
+        await fetchUsuarios();
       }
-
-      // 2. Buscamos os dados complementares na tabela 'usuarios'
-      const { data: userData } = await supabase
-        .from('usuarios')
-        .select('perfil')
-        .eq('email', user.email)
-        .single();
-
-      // Definimos quem é o usuário e se ele tem poder de admin
-      setUsuarioLogado({
-        email: user.email,
-        is_admin: userData?.perfil === 'Regional'
-      });
-
-      // 3. Carregamos a lista da tabela
-      await fetchUsuarios();
       
       setLoadingUser(false);
     };
@@ -60,7 +56,7 @@ export default function UserManagement() {
     initPage();
   }, []);
 
-  // --- BUSCAR USUÁRIOS ---
+  // --- FUNÇÃO PARA BUSCAR USUÁRIOS NO BANCO ---
   const fetchUsuarios = async () => {
     const { data, error } = await supabase
       .from('usuarios')
@@ -70,26 +66,39 @@ export default function UserManagement() {
     if (!error && data) setUsuarios(data);
   };
 
-  // --- LOGOUT ---
+  // --- FUNÇÃO DE LOGOUT (SAIR) CORRIGIDA ---
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    // Usamos o href para limpar estados residuais do navegador
-    window.location.href = '/login';
+    try {
+      console.log("[SISTEMA] Encerrando sessão...");
+      
+      // 1. Invalida a sessão no Supabase Auth
+      await supabase.auth.signOut();
+
+      // 2. Limpa o armazenamento local para garantir
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // 3. Redireciona forçando o recarregamento da página (Crucial para o Middleware)
+      window.location.href = '/login';
+      
+    } catch (err) {
+      console.error("Erro ao sair:", err);
+      window.location.href = '/login';
+    }
   };
 
-  // --- SALVAR NOVO USUÁRIO ---
+  // --- FUNÇÃO PARA SALVAR NOVO USUÁRIO ---
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    setLoadingAction(true);
     setError("");
 
     if (password !== confirmPassword) {
       setError("As senhas não coincidem!");
-      setLoading(false);
+      setLoadingAction(false);
       return;
     }
 
-    // Tenta inserir na tabela do banco
     const { error: insertError } = await supabase
       .from('usuarios')
       .insert([{ nome, email, perfil }]);
@@ -99,13 +108,13 @@ export default function UserManagement() {
     } else {
       setIsModalOpen(false);
       setNome(''); setEmail(''); setPassword(''); setConfirmPassword('');
-      await fetchUsuarios(); // Recarrega a lista
-      alert("Usuário salvo com sucesso!");
+      await fetchUsuarios();
+      alert("Usuário cadastrado com sucesso!");
     }
-    setLoading(false);
+    setLoadingAction(false);
   };
 
-  // --- TELA DE CARREGAMENTO (SKELETON) ---
+  // --- TELA DE CARREGAMENTO INICIAL ---
   if (loadingUser) {
     return (
       <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
@@ -122,32 +131,33 @@ export default function UserManagement() {
       <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
         <div className="flex items-center gap-2 mb-10 border-b border-slate-700 pb-4">
           <ShieldCheck className="text-blue-400" />
-          <span className="text-xl font-bold tracking-tight">SGE-GSU</span>
+          <span className="text-xl font-bold tracking-tight uppercase">SGE-GSU</span>
         </div>
 
         <nav className="space-y-4 flex-1">
-          <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg shadow-blue-900/20">
+          <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg">
             <Users size={20} /> <span>Usuários</span>
           </div>
         </nav>
 
+        {/* BOTÃO SAIR */}
         <button
           onClick={handleLogout}
-          className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"
+          className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-red-900/20 hover:text-red-400 rounded-xl transition-all"
         >
           <LogOut size={20} /> <span>Sair do Sistema</span>
         </button>
       </aside>
 
-      {/* ÁREA PRINCIPAL */}
+      {/* CONTEÚDO PRINCIPAL */}
       <main className="flex-1 p-10 overflow-auto">
         <header className="flex justify-between items-center mb-10">
           <div>
             <h1 className="text-3xl font-black text-slate-900 tracking-tight">Gestão de Usuários</h1>
-            <p className="text-slate-500 font-medium">Acesso: <span className="text-blue-600">{usuarioLogado?.email}</span></p>
+            <p className="text-slate-500 font-medium">Logado como: <span className="text-blue-600 font-bold">{usuarioLogado?.email}</span></p>
           </div>
 
-          {/* SÓ MOSTRA O BOTÃO SE FOR ADMIN (Regional) */}
+          {/* BOTÃO NOVO SÓ PARA ADMINS */}
           {usuarioLogado?.is_admin && (
             <button
               onClick={() => setIsModalOpen(true)}
@@ -158,13 +168,13 @@ export default function UserManagement() {
           )}
         </header>
 
-        {/* TABELA DE USUÁRIOS */}
+        {/* TABELA DE DADOS */}
         <div className="bg-white rounded-[32px] shadow-xl border border-slate-100 overflow-hidden">
           <table className="w-full text-left">
             <thead className="bg-slate-50/50">
               <tr className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">
                 <th className="px-8 py-5">Nome completo</th>
-                <th className="px-8 py-5">E-mail institucional</th>
+                <th className="px-8 py-5">E-mail</th>
                 <th className="px-8 py-5">Perfil</th>
                 <th className="px-8 py-5 text-right">Controle</th>
               </tr>
@@ -182,17 +192,22 @@ export default function UserManagement() {
                     </span>
                   </td>
                   <td className="px-8 py-6 text-right">
-                    <button
-                      onClick={async () => {
-                        if (confirm(`Excluir o usuário ${user.nome}?`)) {
-                          await supabase.from('usuarios').delete().eq('id', user.id);
-                          fetchUsuarios();
-                        }
-                      }}
-                      className="text-red-400 font-bold hover:text-red-600 transition-colors"
-                    >
-                      Remover
-                    </button>
+                    {/* SÓ ADMINS PODEM EXCLUIR */}
+                    {usuarioLogado?.is_admin ? (
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Deseja remover ${user.nome}?`)) {
+                            await supabase.from('usuarios').delete().eq('id', user.id);
+                            fetchUsuarios();
+                          }
+                        }}
+                        className="text-red-400 font-bold hover:text-red-600 transition-colors flex items-center gap-1 ml-auto"
+                      >
+                        <Trash2 size={16} /> Excluir
+                      </button>
+                    ) : (
+                      <span className="text-slate-300 italic text-xs">Sem permissão</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -203,11 +218,11 @@ export default function UserManagement() {
         {/* MODAL DE CADASTRO */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md animate-in fade-in zoom-in duration-200">
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md">
               <div className="p-10">
                 <div className="flex justify-between items-center mb-8">
                   <h2 className="text-2xl font-black text-slate-900">Novo Cadastro</h2>
-                  <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                  <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                     <X size={24} />
                   </button>
                 </div>
@@ -222,14 +237,14 @@ export default function UserManagement() {
                   </div>
 
                   <select value={perfil} onChange={(e) => setPerfil(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-slate-200 outline-none font-bold bg-slate-50">
-                    <option value="Escola">Escola</option>
-                    <option value="Regional">Regional</option>
+                    <option value="Escola">Perfil: Escola</option>
+                    <option value="Regional">Perfil: Regional</option>
                   </select>
 
                   {error && <div className="text-red-600 text-[10px] font-black uppercase text-center bg-red-50 p-2 rounded-lg">{error}</div>}
 
-                  <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black uppercase tracking-widest text-xs disabled:bg-slate-300 shadow-lg shadow-blue-100 transition-all hover:bg-blue-700">
-                    {loading ? <Loader2 className="animate-spin mx-auto" /> : 'Registrar Usuário'}
+                  <button type="submit" disabled={loadingAction} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-100 transition-all hover:bg-blue-700 disabled:bg-slate-300">
+                    {loadingAction ? <Loader2 className="animate-spin mx-auto" /> : 'Finalizar Registro'}
                   </button>
                 </form>
               </div>
