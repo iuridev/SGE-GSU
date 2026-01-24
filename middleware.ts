@@ -4,8 +4,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   
-  // LOG 1: Monitorar qual página está sendo acessada
-  console.log(`[MIDDLEWARE] Acessando: ${path}`);
+  // LOG 1: Verificar se o middleware está rodando e qual rota interceptou
+  console.log(`[MIDDLEWARE] Processando rota: ${path}`);
 
   let response = NextResponse.next({
     request: {
@@ -24,18 +24,14 @@ export async function middleware(request: NextRequest) {
         set(name: string, value: string, options: CookieOptions) {
           request.cookies.set({ name, value, ...options })
           response = NextResponse.next({
-            request: {
-              headers: request.headers,
-            },
+            request: { headers: request.headers },
           })
           response.cookies.set({ name, value, ...options })
         },
         remove(name: string, options: CookieOptions) {
           request.cookies.set({ name, value: '', ...options })
           response = NextResponse.next({
-            request: {
-              headers: request.headers,
-            },
+            request: { headers: request.headers },
           })
           response.cookies.set({ name, value: '', ...options })
         },
@@ -43,33 +39,29 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // LOG 2: Verificando usuário
-  // Usamos getUser() em vez de getSession() para evitar falsos positivos
+  // LOG 2: Usar getUser() para validar a sessão de forma segura no servidor
   const { data: { user }, error } = await supabase.auth.getUser()
 
   if (error) {
-    console.log("[MIDDLEWARE] Sem sessão ativa ou erro na verificação.");
+    console.log("[MIDDLEWARE] Sem usuário autenticado ou sessão expirada.");
   }
 
-  // REGRA 1: Se NÃO estiver logado e tentar acessar páginas internas
+  // REGRA DE PROTEÇÃO 1: Se não estiver logado, obriga a ir para /login
   if (!user && !path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Bloqueado: Redirecionando para /login");
-    const redirectUrl = new URL('/login', request.url);
-    return NextResponse.redirect(redirectUrl);
+    console.log("[MIDDLEWARE] Usuário não logado. Redirecionando para /login");
+    return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  // REGRA 2: Se JÁ estiver logado e tentar acessar o /login
+  // REGRA DE PROTEÇÃO 2: Se já estiver logado, não deixa voltar para a tela de login
   if (user && path.startsWith('/login')) {
-    console.log("[MIDDLEWARE] Já logado: Redirecionando para a Home");
-    const redirectUrl = new URL('/', request.url);
-    return NextResponse.redirect(redirectUrl);
+    console.log("[MIDDLEWARE] Usuário já autenticado. Redirecionando para a Home (/)");
+    return NextResponse.redirect(new URL('/', request.url));
   }
 
-  console.log("[MIDDLEWARE] Acesso liberado.");
+  console.log("[MIDDLEWARE] Acesso autorizado.");
   return response
 }
 
 export const config = {
-  // Monitora tudo exceto arquivos do sistema, imagens e favicon
   matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
 }
