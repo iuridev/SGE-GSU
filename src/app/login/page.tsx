@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // Adicionado useEffect
 import { ShieldCheck, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useRouter } from 'next/navigation';
@@ -11,48 +11,49 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const router = useRouter();
 
+  // --- NOVA FUNÇÃO: VERIFICAÇÃO AUTOMÁTICA ---
+  useEffect(() => {
+    const checkActiveSession = async () => {
+      console.log("[LOGIN] Verificando se já existe usuário logado...");
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session) {
+        console.log("[LOGIN] Usuário já logado detectado. Pulando para Home...");
+        window.location.href = '/';
+      }
+    };
+    checkActiveSession();
+  }, []);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
-    // LOG 1: Início do processo
     console.log("--- INICIANDO TENTATIVA DE LOGIN ---");
-    console.log("E-mail digitado:", email);
 
     try {
-      // LOG 2: Chamando o Supabase
-      console.log("Chamando supabase.auth.signInWithPassword...");
-      
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (authError) {
-        // LOG 3: Erro retornado pelo Supabase (ex: senha errada)
-        console.error("Erro retornado pelo Supabase:", authError.status, authError.message);
+        console.error("Erro retornado pelo Supabase:", authError.message);
         setError("E-mail ou senha incorretos.");
         setLoading(false);
         return;
       }
 
-      // LOG 4: Sucesso na autenticação
       if (data?.session) {
-        console.log("Login bem-sucedido! Sessão criada para:", data.user?.email);
-        console.log("Redirecionando para a Home...");
+        console.log("Login bem-sucedido! Redirecionando...");
         window.location.href = '/'; 
       } else {
-        console.warn("Login concluído, mas nenhuma sessão foi retornada.");
         setLoading(false);
       }
 
     } catch (err: any) {
-      // LOG 5: Erro crítico (Geralmente variáveis de ambiente faltando)
-      console.error("ERRO CRÍTICO NO LOGIN:");
-      console.error("Mensagem do erro:", err.message);
-      console.error("Stack trace:", err);
-      
+      console.error("ERRO CRÍTICO NO LOGIN:", err.message);
       setError("Erro de conexão. Verifique as chaves do banco.");
       setLoading(false);
     }
@@ -102,7 +103,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* LOG DE STATUS NA TELA (Opcional, ajuda a ver se o código travou) */}
         <p className="mt-4 text-[10px] text-center text-slate-300 uppercase font-bold">
             Status: {loading ? 'Conectando ao banco...' : 'Aguardando login'}
         </p>
