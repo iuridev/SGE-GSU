@@ -4,6 +4,8 @@ import { Users, ShieldCheck, Plus, Loader2, LogOut, X } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { useRouter } from 'next/navigation';
 
+//arquivo renomeado
+
 export default function UserManagement() {
   const router = useRouter();
 
