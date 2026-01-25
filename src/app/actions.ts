@@ -4,14 +4,20 @@ import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
-// --- FUNÇÃO AUXILIAR PARA PEGAR O ADMIN ---
-// Isso evita repetir código e garante que a chave existe antes de usar
+// --- FUNÇÃO AUXILIAR DE ADMINISTRAÇÃO (COM DEBUG) ---
 function getSupabaseAdmin() {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   
+  // LOGS PARA O CONSOLE DO VERCEL (Ajudam a descobrir o erro)
+  console.log("--- [DEBUG] TENTANDO ACESSAR CHAVE DE ADMIN ---");
   if (!serviceRoleKey) {
-    console.error("ERRO CRÍTICO: SUPABASE_SERVICE_ROLE_KEY não encontrada.");
-    throw new Error("Erro de Configuração: Chave de Admin (Service Role) não configurada no Vercel.");
+    console.error(">>> FALHA: A variável SUPABASE_SERVICE_ROLE_KEY é undefined/nula.");
+    console.error(">>> Verifique se ela foi adicionada no Vercel e se o REDEPLOY foi feito.");
+    throw new Error("Erro de Configuração: Chave de Admin (Service Role) não encontrada.");
+  } else {
+    // Mostra apenas os primeiros 5 caracteres por segurança
+    console.log(`>>> SUCESSO: Chave encontrada. Início: ${serviceRoleKey.substring(0, 5)}...`);
+    console.log(`>>> Tamanho da chave: ${serviceRoleKey.length} caracteres.`);
   }
 
   return createClient(
@@ -26,10 +32,11 @@ function getSupabaseAdmin() {
   )
 }
 
+// --- CRIAR NOVO USUÁRIO ---
 export async function createNewUser(formData: any) {
   const cookieStore = await cookies()
 
-  // 1. Verificação de Admin (Segurança do Frontend)
+  // 1. Verificação de Segurança: Quem está pedindo é Admin?
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -46,10 +53,10 @@ export async function createNewUser(formData: any) {
   }
 
   try {
-    // 2. Tenta obter o cliente Admin (Se falhar a chave, o erro estoura aqui e cai no catch)
+    // 2. Obtém o cliente Admin (aqui que os logs vão aparecer se der erro)
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 3. Cria no Auth
+    // 3. Cria no Auth (Já confirmando email)
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: formData.email,
       password: formData.senha,
@@ -58,17 +65,20 @@ export async function createNewUser(formData: any) {
     })
 
     if (authError) return { error: authError.message }
-    if (!authData.user) return { error: 'Erro ao gerar ID.' }
+    if (!authData.user) return { error: 'Erro ao gerar ID de autenticação.' }
 
-    // 4. Cria no Banco
-    const { error: dbError } = await supabaseAdmin.from('usuarios').insert({
-      id: authData.user.id,
-      nome: formData.nome,
-      email: formData.email,
-      perfil: formData.perfil
-    })
+    // 4. Cria no Banco de Dados
+    const { error: dbError } = await supabaseAdmin
+      .from('usuarios')
+      .insert({
+        id: authData.user.id,
+        nome: formData.nome,
+        email: formData.email,
+        perfil: formData.perfil
+      })
 
     if (dbError) {
+      // Se falhar no banco, remove do auth para não ficar "sujo"
       await supabaseAdmin.auth.admin.deleteUser(authData.user.id)
       return { error: 'Erro ao salvar no banco: ' + dbError.message }
     }
@@ -80,6 +90,7 @@ export async function createNewUser(formData: any) {
   }
 }
 
+// --- EXCLUIR USUÁRIO ---
 export async function deleteSystemUser(userId: string) {
   const cookieStore = await cookies()
   
@@ -102,7 +113,7 @@ export async function deleteSystemUser(userId: string) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 2. Primeiro tenta deletar do Auth (O mais importante para segurança)
+    // 2. Remove do Auth (Login)
     const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId)
     
     if (authError) {
@@ -110,16 +121,15 @@ export async function deleteSystemUser(userId: string) {
       return { error: 'Erro ao bloquear acesso: ' + authError.message }
     }
 
-    // 3. Depois deleta da tabela (Para limpar a lista)
+    // 3. Remove da Lista (Banco)
     const { error: dbError } = await supabaseAdmin
       .from('usuarios')
       .delete()
       .eq('id', userId)
 
     if (dbError) {
-      // É AQUI QUE O ERRO DE FOREIGN KEY VAI APARECER
       console.error("Erro Banco:", dbError)
-      return { error: 'Acesso removido, mas erro ao apagar dados: ' + dbError.message }
+      return { error: 'Acesso removido, mas erro ao limpar dados: ' + dbError.message }
     }
 
     return { success: true }
