@@ -1,215 +1,299 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School } from 'lucide-react';
+import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createNewUser, deleteSystemUser } from './actions';
+import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
 import Link from 'next/link';
 
-export default function UserManagement() {
-  const [loadingUser, setLoadingUser] = useState(true);
-  const [usuarios, setUsuarios] = useState<any[]>([]);
-  const [escolas, setEscolas] = useState<any[]>([]); // Lista para o Select
+export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
   const [usuarioLogado, setUsuarioLogado] = useState<any>(null);
   
-  // Modal State
-  const [showModal, setShowModal] = useState(false);
-  const [loadingCreate, setLoadingCreate] = useState(false);
-  const [formData, setFormData] = useState({
-    nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: ''
-  });
+  // Dados do Dashboard
+  const [usuarios, setUsuarios] = useState<any[]>([]);
+  const [zeladorias, setZeladorias] = useState<any[]>([]); 
+  const [alertasVencimento, setAlertasVencimento] = useState<any[]>([]); 
+  const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
 
-  // Função inteligente que carrega usuários baseado no perfil
-  const loadUsers = async (userProfile: any) => {
-    let query = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
+  // Dados Auxiliares
+  const [escolas, setEscolas] = useState<any[]>([]);
+  
+  // Modais
+  const [modalType, setModalType] = useState<'create' | 'edit' | 'reset' | null>(null);
+  const [formData, setFormData] = useState({ id: '', nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
+  const [loadingAction, setLoadingAction] = useState(false);
 
-    // REGRA DE OURO: Se for Operacional, filtra pela escola dele
-    if (userProfile.perfil === 'Operacional' && userProfile.escola_id) {
-      query = query.eq('escola_id', userProfile.escola_id);
+  useEffect(() => {
+    const init = async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase.from('usuarios').select('perfil, escola_id').eq('email', user.email).single();
+        const userData = { ...profile, email: user.email, is_admin: profile?.perfil === 'Regional' };
+        setUsuarioLogado(userData);
+        
+        if (userData.is_admin) await loadEscolas();
+        await loadDashboardData(userData);
+      } else {
+        window.location.href = '/login';
+      }
+      setLoading(false);
+    };
+    init();
+  }, []);
+
+  const loadDashboardData = async (userProfile: any) => {
+    // 1. Carregar Zeladorias
+    let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
+    if (!userProfile.is_admin && userProfile.escola_id) {
+        queryZel = queryZel.eq('escola_id', userProfile.escola_id);
+    }
+    const { data: dataZel } = await queryZel;
+    
+    if (dataZel) {
+        setZeladorias(dataZel);
+        setStats({
+            total: dataZel.length,
+            emAndamento: dataZel.filter(z => z.etapa_atual < 7).length,
+            concluidos: dataZel.filter(z => z.etapa_atual === 7).length,
+            isentos: dataZel.filter(z => z.isento_pagamento).length
+        });
+
+        const hoje = new Date();
+        const alertas = dataZel
+            .filter(z => z.etapa_atual >= 6 && z.data_etapa_6)
+            .map(z => {
+                const dataBase = new Date(z.data_etapa_6);
+                const validade = new Date(dataBase);
+                validade.setFullYear(dataBase.getFullYear() + 2);
+                const diasRestantes = Math.ceil((validade.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
+                return { ...z, validade, diasRestantes };
+            })
+            .filter(z => z.diasRestantes < 90)
+            .sort((a, b) => a.diasRestantes - b.diasRestantes);
+        
+        setAlertasVencimento(alertas);
     }
 
-    const { data: list } = await query;
-    if (list) setUsuarios(list);
+    // 2. Carregar Usuários
+    let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
+    if (!userProfile.is_admin && userProfile.escola_id) {
+      queryUser = queryUser.eq('escola_id', userProfile.escola_id);
+    }
+    const { data: dataUser } = await queryUser;
+    if (dataUser) setUsuarios(dataUser);
   };
 
-  // Carrega lista de escolas para o Admin poder escolher no Modal
   const loadEscolas = async () => {
     const { data } = await supabase.from('escolas').select('id, nome');
     if (data) setEscolas(data);
   };
 
-  useEffect(() => {
-    const loadSystem = async () => {
-      setLoadingUser(true);
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (user) {
-        // Busca perfil completo (incluindo a escola_id do usuario logado)
-        const { data: profile } = await supabase
-          .from('usuarios')
-          .select('perfil, escola_id')
-          .eq('email', user.email)
-          .single();
-
-        const userData = {
-          email: user.email,
-          is_admin: profile?.perfil === 'Regional',
-          escola_id: profile?.escola_id,
-          perfil: profile?.perfil
-        };
-
-        setUsuarioLogado(userData);
-        
-        // Se for admin, carrega as escolas para preencher o <select>
-        if (userData.is_admin) await loadEscolas();
-        
-        await loadUsers(userData);
-      }
-      setLoadingUser(false);
-    };
-    loadSystem();
-  }, []);
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
-  };
-
-  const handleCreateUser = async (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoadingCreate(true);
-    try {
-      const resultado = await createNewUser(formData);
-      if (resultado.error) alert('Erro: ' + resultado.error);
-      else {
-        alert('Usuário criado!');
-        setShowModal(false);
-        setFormData({ nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
-        loadUsers(usuarioLogado);
-      }
-    } catch (error: any) { alert(error.message); } 
-    finally { setLoadingCreate(false); }
+    setLoadingAction(true);
+    let res;
+    if (modalType === 'create') res = await createNewUser(formData);
+    if (modalType === 'edit') res = await updateSystemUser(formData.id, formData);
+    if (modalType === 'reset') res = await resetUserPassword(formData.id, formData.senha);
+    if (res?.error) alert(res.error);
+    else {
+      alert('Sucesso!');
+      setModalType(null);
+      resetForm();
+      loadDashboardData(usuarioLogado);
+    }
+    setLoadingAction(false);
   };
 
-  const handleDelete = async (userId: string, userName: string) => {
-     if(!window.confirm(`Remover acesso de ${userName}?`)) return;
-     setLoadingUser(true);
-     await deleteSystemUser(userId);
-     loadUsers(usuarioLogado);
-     setLoadingUser(false);
+  const handleDelete = async (userId: string, name: string) => {
+    if (confirm(`Remover ${name}?`)) {
+      await deleteSystemUser(userId);
+      loadDashboardData(usuarioLogado);
+    }
   };
+  
+  const resetForm = () => setFormData({ id: '', nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
+  const openEdit = (user: any) => { setFormData({ id: user.id, nome: user.nome, email: user.email, senha: '', perfil: user.perfil, escola_id: user.escola_id || '' }); setModalType('edit'); };
+  const openReset = (user: any) => { setFormData({ ...formData, id: user.id, nome: user.nome, senha: '' }); setModalType('reset'); };
 
-  if (loadingUser) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin" /></div>;
+  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 text-slate-900 font-sans">
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
       <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
-        <div className="flex items-center gap-2 mb-10 border-b border-slate-700 pb-4">
-          <ShieldCheck className="text-blue-400" />
-          <span className="text-xl font-bold">SGE-GSU</span>
-        </div>
+        <div className="flex items-center gap-2 mb-10 pb-4 border-b border-slate-700"><ShieldCheck className="text-blue-400" /><span className="text-xl font-bold">SGE-GSU</span></div>
         <nav className="flex-1 space-y-2">
-          <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg">
-            <Users size={20} /> <span>Usuários</span>
-          </div>
-          
-          {/* Botão para ir para Escolas (Só Admin vê) */}
+          <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg"><LayoutDashboard size={20} /> <span>Painel</span></div>
+          <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
           {usuarioLogado?.is_admin && (
-            <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all">
-              <School size={20} /> <span>Escolas</span>
-            </Link>
+            <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>
           )}
         </nav>
-        <button onClick={handleLogout} className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-red-900/20 rounded-xl transition-all">
-          <LogOut size={20} /> <span>Sair</span>
-        </button>
+        <button onClick={async () => { await supabase.auth.signOut(); window.location.href = '/login'; }} className="flex items-center gap-3 p-3 text-slate-400 hover:text-red-400 rounded-xl"><LogOut size={20} /> <span>Sair</span></button>
       </aside>
 
       <main className="flex-1 p-10 overflow-auto relative">
         <header className="flex justify-between items-center mb-10">
           <div>
-            <h1 className="text-3xl font-black">Gestão de Usuários</h1>
-            <p className="text-slate-500">Logado como: <span className="text-blue-600 font-bold">{usuarioLogado?.email}</span></p>
+            <h1 className="text-3xl font-black tracking-tight">Painel de Controle</h1>
+            <p className="text-slate-500 font-medium">Bem-vindo, <span className="text-blue-600 font-bold">{usuarioLogado?.nome || usuarioLogado?.email}</span></p>
           </div>
-          {usuarioLogado?.is_admin && (
-            <button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg">
-              <Plus size={20} /> Novo Usuário
-            </button>
-          )}
         </header>
 
-        <div className="bg-white rounded-[32px] shadow-xl border border-slate-100 overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50/50">
-              <tr className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">
-                <th className="px-8 py-5">Nome</th>
-                <th className="px-8 py-5">Escola</th>
-                <th className="px-8 py-5">Perfil</th>
-                <th className="px-8 py-5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50 text-sm">
-              {usuarios.map((user) => (
-                <tr key={user.id} className="hover:bg-slate-50/50">
-                  <td className="px-8 py-6 font-bold text-slate-700">{user.nome}</td>
-                  <td className="px-8 py-6 text-slate-500">
-                    {user.escolas?.nome || <span className="text-slate-300 italic">Sem vínculo</span>}
-                  </td>
-                  <td className="px-8 py-6">
-                    <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>
-                      {user.perfil}
-                    </span>
-                  </td>
-                  <td className="px-8 py-6 text-right">
-                    {usuarioLogado?.is_admin && (
-                      <button onClick={() => handleDelete(user.id, user.nome)} className="text-red-400 font-bold hover:text-red-600 flex items-center gap-1 ml-auto">
-                        <Trash2 size={16} /> Excluir
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Modal Novo Usuário */}
-        {showModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-3xl p-6 w-full max-w-md">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-black text-lg">Novo Usuário</h3>
-                <button onClick={() => setShowModal(false)}><X className="text-slate-400"/></button>
-              </div>
-              <form onSubmit={handleCreateUser} className="space-y-4">
-                <input required placeholder="Nome" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm"/>
-                <input required placeholder="E-mail" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm"/>
-                <input required type="password" placeholder="Senha" value={formData.senha} onChange={e => setFormData({...formData, senha: e.target.value})} className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm"/>
-                
-                {/* SELECT DE ESCOLAS (NOVO) */}
+        {/* --- SEÇÃO: MÓDULO ZELADORIA --- */}
+        <section className="mb-16">
+            <div className="flex items-center gap-4 mb-6">
+                <div className="p-3 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-600/20">
+                    <Home size={24} />
+                </div>
                 <div>
-                   <label className="text-xs font-bold text-slate-500 uppercase">Vincular Escola</label>
-                   <select 
-                      value={formData.escola_id} 
-                      onChange={e => setFormData({...formData, escola_id: e.target.value})}
-                      className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm mt-1"
-                   >
-                      <option value="">Selecione uma escola...</option>
-                      {escolas.map(esc => (
-                        <option key={esc.id} value={esc.id}>{esc.nome}</option>
-                      ))}
-                   </select>
+                    <h2 className="text-2xl font-black text-slate-800">Módulo de Zeladoria</h2>
+                    <p className="text-slate-500 text-sm font-medium">Indicadores de ocupação e contratos</p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                {/* Card 1: Total */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
+                    <div className="absolute right-[-10px] top-[-10px] bg-blue-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Total de Zeladorias</span>
+                    <div className="flex items-center gap-3 z-10">
+                        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                            <Home size={24} />
+                        </div>
+                        <span className="text-4xl font-black text-slate-800">{stats.total}</span>
+                    </div>
                 </div>
 
-                {/* Seletor de Perfil */}
-                <div className="grid grid-cols-2 gap-3">
-                    <button type="button" onClick={() => setFormData({...formData, perfil: 'Operacional'})} className={`p-3 rounded-xl border text-sm font-bold ${formData.perfil === 'Operacional' ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white'}`}>Operacional</button>
-                    <button type="button" onClick={() => setFormData({...formData, perfil: 'Regional'})} className={`p-3 rounded-xl border text-sm font-bold ${formData.perfil === 'Regional' ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white'}`}>Regional (Admin)</button>
+                {/* Card 2: Em Andamento */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
+                    <div className="absolute right-[-10px] top-[-10px] bg-orange-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Em Andamento</span>
+                    <div className="flex items-center gap-3 z-10">
+                        <div className="p-3 bg-orange-50 text-orange-600 rounded-xl">
+                            <Clock size={24} />
+                        </div>
+                        <span className="text-4xl font-black text-slate-800">{stats.emAndamento}</span>
+                    </div>
                 </div>
 
-                <button disabled={loadingCreate} type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-4">
-                   {loadingCreate ? <Loader2 className="animate-spin mx-auto"/> : 'Criar Usuário'}
-                </button>
+                {/* Card 3: Concluídos */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
+                    <div className="absolute right-[-10px] top-[-10px] bg-green-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Concluídos (Vigentes)</span>
+                    <div className="flex items-center gap-3 z-10">
+                        <div className="p-3 bg-green-50 text-green-600 rounded-xl">
+                            <CheckCircle2 size={24} />
+                        </div>
+                        <span className="text-4xl font-black text-slate-800">{stats.concluidos}</span>
+                    </div>
+                </div>
+
+                {/* Card 4: Isentos */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
+                    <div className="absolute right-[-10px] top-[-10px] bg-purple-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
+                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Isentos de Pagamento</span>
+                    <div className="flex items-center gap-3 z-10">
+                        <div className="p-3 bg-purple-50 text-purple-600 rounded-xl">
+                            <Banknote size={24} />
+                        </div>
+                        <span className="text-4xl font-black text-slate-800">{stats.isentos}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Alertas de Zeladoria */}
+            {alertasVencimento.length > 0 && (
+                <div className="animate-in fade-in slide-in-from-top-4 duration-500 bg-red-50/50 p-6 rounded-3xl border border-red-100">
+                    <div className="flex items-center gap-2 mb-4">
+                        <AlertTriangle className="text-red-500 animate-pulse"/>
+                        <h3 className="text-lg font-bold text-slate-800">Alertas de Vencimento (Zeladoria)</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {alertasVencimento.map(alerta => (
+                            <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-1">
+                                <h4 className="font-bold text-slate-800">{alerta.escolas?.nome}</h4>
+                                <p className="text-sm text-slate-600">{alerta.nome_zelador}</p>
+                                <div className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit text-xs font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                                    <Clock size={12}/>
+                                    {alerta.diasRestantes < 0 ? `Venceu há ${Math.abs(alerta.diasRestantes)} dias` : `Vence em ${alerta.diasRestantes} dias`}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </section>
+
+        {/* --- SEÇÃO: SISTEMA / USUÁRIOS --- */}
+        <section className="border-t border-slate-200 pt-10">
+            <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-slate-100 rounded-xl text-slate-500">
+                        <Users size={20} />
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2>
+                </div>
+                {usuarioLogado?.is_admin && (
+                    <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2">
+                        <Plus size={16}/> Adicionar Usuário
+                    </button>
+                )}
+            </div>
+            
+            <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+                <table className="w-full text-left">
+                    <thead className="bg-slate-50/50 text-slate-400 text-[10px] uppercase tracking-widest font-bold">
+                    <tr><th className="p-6">Nome</th><th className="p-6">Escola</th><th className="p-6">Perfil</th><th className="p-6 text-right">Ações</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50 text-sm">
+                    {usuarios.map(user => (
+                        <tr key={user.id} className="hover:bg-slate-50/50">
+                        <td className="p-6"><div className="font-bold">{user.nome}</div><div className="text-slate-400 text-xs">{user.email}</div></td>
+                        <td className="p-6 text-slate-500">{user.escolas?.nome || '-'}</td>
+                        <td className="p-6"><span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>{user.perfil}</span></td>
+                        <td className="p-6 flex justify-end gap-2">
+                            {usuarioLogado?.is_admin && (
+                            <>
+                                <button onClick={() => openReset(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Key size={18}/></button>
+                                <button onClick={() => openEdit(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit size={18}/></button>
+                                <button onClick={() => handleDelete(user.id, user.nome)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button>
+                            </>
+                            )}
+                        </td>
+                        </tr>
+                    ))}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        {/* Modais */}
+        {modalType && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-md animate-in zoom-in duration-200">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-black text-xl">{modalType === 'create' ? 'Novo Usuário' : modalType === 'edit' ? 'Editar' : 'Nova Senha'}</h3>
+                <button onClick={() => setModalType(null)}><X className="text-slate-400"/></button>
+              </div>
+              <form onSubmit={handleSave} className="space-y-4">
+                {modalType !== 'reset' && (
+                  <>
+                    <input required placeholder="Nome" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/>
+                    <input required type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/>
+                    <select value={formData.escola_id} onChange={e => setFormData({...formData, escola_id: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl">
+                        <option value="">Sem vínculo</option>
+                        {escolas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </select>
+                    <div className="flex gap-2">{['Operacional', 'Regional'].map(p => <button key={p} type="button" onClick={() => setFormData({...formData, perfil: p})} className={`flex-1 p-2 rounded-xl border text-xs font-bold ${formData.perfil === p ? 'bg-slate-800 text-white' : 'bg-white'}`}>{p}</button>)}</div>
+                  </>
+                )}
+                {(modalType === 'create' || modalType === 'reset') && (
+                  <input required type="password" placeholder="Senha" minLength={6} value={formData.senha} onChange={e => setFormData({...formData, senha: e.target.value})} className="w-full bg-white border border-yellow-300 p-3 rounded-xl"/>
+                )}
+                <button disabled={loadingAction} className="w-full bg-blue-600 text-white font-bold p-3 rounded-xl">{loadingAction ? <Loader2 className="animate-spin mx-auto"/> : 'Salvar'}</button>
               </form>
             </div>
           </div>

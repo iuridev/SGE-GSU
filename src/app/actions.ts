@@ -5,179 +5,237 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
 // --- FUNÇÃO AUXILIAR DE ADMINISTRAÇÃO ---
-// Garante que a chave secreta existe antes de tentar usar
 function getSupabaseAdmin() {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  
   if (!serviceRoleKey) {
-    console.error(">>> ERRO CRÍTICO: SUPABASE_SERVICE_ROLE_KEY não encontrada nas variáveis de ambiente.");
     throw new Error("Erro de Configuração: Chave de Admin (Service Role) não encontrada no Vercel.");
   }
-
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     serviceRoleKey,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    }
+    { auth: { autoRefreshToken: false, persistSession: false } }
   )
 }
 
-// --- CRIAR ESCOLA (ATUALIZADO: POLO INTEIRO) ---
-export async function createEscola(data: { 
-  nome: string; 
-  cidade: string; 
-  estado: string;
-  email: string;
-  telefone: string;
-  diretor: string;
-  polo: number; // <--- Agora tipado como number
-}) {
+// --- CHECAGEM DE PERMISSÃO (Reutilizável) ---
+async function checkAdminPermission() {
   const cookieStore = await cookies()
-  
-  // 1. Verificação de Segurança (Quem está logado?)
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
   )
-
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Usuário não autenticado.' }
-  
+  if (!user) return { allowed: false, error: 'Não autenticado.' }
+
   const { data: userProfile } = await supabase.from('usuarios').select('perfil').eq('email', user.email).single()
-  
-  // Apenas 'Regional' (Admin) pode criar escolas
-  if (userProfile?.perfil !== 'Regional') {
-    return { error: 'Acesso negado. Apenas Administradores podem criar escolas.' }
-  }
+  if (userProfile?.perfil !== 'Regional') return { allowed: false, error: 'Acesso negado.' }
+
+  return { allowed: true, user }
+}
+
+// ==========================================
+//              AÇÕES DE ESCOLA
+// ==========================================
+
+export async function createEscola(data: any) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    
-    // 2. Inserção no Banco
-    const { error } = await supabaseAdmin.from('escolas').insert({
+    const { error } = await supabaseAdmin.from('escolas').insert(data);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+export async function updateEscola(id: string, data: any) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('escolas').update({
       nome: data.nome,
       cidade: data.cidade,
       estado: data.estado,
       email: data.email,
       telefone: data.telefone,
       diretor: data.diretor,
-      polo: data.polo // Envia como número (int4 no banco)
-    });
-    
+      polo: data.polo
+    }).eq('id', id);
+
     if (error) throw error;
     return { success: true };
-
-  } catch (error: any) {
-    console.error("Erro ao criar escola:", error);
-    return { error: 'Erro ao criar escola: ' + error.message };
-  }
+  } catch (error: any) { return { error: error.message }; }
 }
 
-// --- CRIAR USUÁRIO (COM VÍNCULO DE ESCOLA) ---
+// ==========================================
+//              AÇÕES DE USUÁRIO
+// ==========================================
+
 export async function createNewUser(formData: any) {
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  )
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Usuário não autenticado.' }
-
-  const { data: userProfile } = await supabase.from('usuarios').select('perfil').eq('email', user.email).single()
-
-  if (userProfile?.perfil !== 'Regional') {
-    return { error: 'Permissão negada. Apenas Admins podem criar usuários.' }
-  }
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 1. Cria usuário no Auth (Login)
+    // 1. Auth
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: formData.email,
       password: formData.senha,
-      email_confirm: true, // Já confirma o email automaticamente
+      email_confirm: true,
       user_metadata: { nome: formData.nome }
     })
-
     if (authError) return { error: authError.message }
-    if (!authData.user) return { error: 'Erro ao gerar ID de autenticação.' }
 
-    // 2. Salva dados na tabela pública (vinculando escola se houver)
-    const { error: dbError } = await supabaseAdmin
-      .from('usuarios')
-      .insert({
-        id: authData.user.id,
-        nome: formData.nome,
-        email: formData.email,
-        perfil: formData.perfil,
-        escola_id: formData.escola_id || null // Salva o ID da escola ou null
-      })
+    // 2. Banco
+    const { error: dbError } = await supabaseAdmin.from('usuarios').insert({
+      id: authData.user!.id,
+      nome: formData.nome,
+      email: formData.email,
+      perfil: formData.perfil,
+      escola_id: formData.escola_id || null
+    })
 
     if (dbError) {
-      // Se der erro no banco, remove do Auth para não deixar "lixo"
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id)
-      return { error: 'Erro ao salvar dados no banco: ' + dbError.message }
+      await supabaseAdmin.auth.admin.deleteUser(authData.user!.id)
+      return { error: dbError.message }
     }
-
     return { success: true }
-
-  } catch (error: any) {
-    return { error: error.message }
-  }
+  } catch (error: any) { return { error: error.message } }
 }
 
-// --- EXCLUIR USUÁRIO ---
-export async function deleteSystemUser(userId: string) {
-  const cookieStore = await cookies()
-  
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  )
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Usuário não autenticado.' }
-
-  const { data: userProfile } = await supabase.from('usuarios').select('perfil').eq('email', user.email).single()
-
-  if (userProfile?.perfil !== 'Regional') {
-    return { error: 'Apenas Administradores podem excluir usuários.' }
-  }
+// --- NOVO: EDITAR USUÁRIO ---
+export async function updateSystemUser(userId: string, data: any) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 1. Remove acesso (Auth)
+    // 1. Atualiza no Auth (Login) - Importante para o email funcionar
+    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      email: data.email,
+      user_metadata: { nome: data.nome }
+    });
+    if (authError) return { error: 'Erro Auth: ' + authError.message };
+
+    // 2. Atualiza no Banco de Dados
+    const { error: dbError } = await supabaseAdmin.from('usuarios').update({
+      nome: data.nome,
+      email: data.email,
+      perfil: data.perfil,
+      escola_id: data.escola_id || null
+    }).eq('id', userId);
+
+    if (dbError) return { error: 'Erro Banco: ' + dbError.message };
+
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+// --- NOVO: RESETAR SENHA ---
+export async function resetUserPassword(userId: string, newPassword: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password: newPassword
+    });
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+export async function deleteSystemUser(userId: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
     const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId)
-    
-    if (authError) {
-      console.error("Erro Auth:", authError)
-      return { error: 'Erro ao bloquear acesso: ' + authError.message }
-    }
+    if (authError) return { error: authError.message }
 
-    // 2. Remove dados (Banco)
-    const { error: dbError } = await supabaseAdmin
-      .from('usuarios')
-      .delete()
-      .eq('id', userId)
-
-    if (dbError) {
-      console.error("Erro Banco:", dbError)
-      return { error: 'Acesso removido, mas erro ao limpar dados: ' + dbError.message }
-    }
-
+    const { error: dbError } = await supabaseAdmin.from('usuarios').delete().eq('id', userId)
+    if (dbError) return { error: dbError.message }
     return { success: true }
+  } catch (error: any) { return { error: error.message } }
+}
 
-  } catch (error: any) {
-    return { error: error.message }
-  }
+// ==========================================
+//              AÇÕES DE ZELADORIA
+// ==========================================
+export async function createZeladoria(data: { 
+  escola_id: string; 
+  nome_zelador: string; 
+  cpf_zelador: string;
+  numero_sei: string;
+  cargo_zelador: string;
+  data_inicio: string;
+  isento_pagamento: boolean; // <--- Novo Campo
+}) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    
+    const { error } = await supabaseAdmin.from('zeladorias').insert({
+      escola_id: data.escola_id,
+      nome_zelador: data.nome_zelador,
+      cpf_zelador: data.cpf_zelador,
+      numero_sei: data.numero_sei,
+      cargo_zelador: data.cargo_zelador,
+      data_inicio: data.data_inicio,
+      isento_pagamento: data.isento_pagamento, // Salva no banco
+      etapa_atual: 1,
+      data_etapa_1: new Date().toISOString()
+    });
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+
+export async function updateZeladoriaEtapa(id: string, novaEtapa: number) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+
+    // Monta o objeto dinâmico: Se avançar para etapa 3, salva data_etapa_3
+    const campoData = `data_etapa_${novaEtapa}`;
+    const updateData: any = {
+      etapa_atual: novaEtapa,
+      [campoData]: new Date().toISOString() // Marca a data de hoje na etapa nova
+    };
+
+    // Se for a última etapa (7), podemos marcar como Concluído se quiser
+    // if (novaEtapa === 7) updateData.status = 'Concluído';
+
+    const { error } = await supabaseAdmin.from('zeladorias').update(updateData).eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+export async function arquivarZeladoria(id: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('zeladorias').update({ status: 'Arquivado' }).eq('id', id);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
 }
