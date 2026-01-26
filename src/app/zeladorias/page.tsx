@@ -1,11 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// Adicionei o ícone 'Filter' e 'X'
-import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, Clock, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, AlertTriangle, Edit, Filter, X } from 'lucide-react';
+import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, Edit, Filter, X, FileDown } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
 import { createZeladoria, updateZeladoriaEtapa, arquivarZeladoria, updateZeladoriaData } from '../actions';
 import Link from 'next/link';
+
+// Importação segura do PDF + AutoTable
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const ETAPAS = [
   { id: 1, label: "Processo SEI" },
@@ -28,7 +31,6 @@ export default function ZeladoriasPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [currentId, setCurrentId] = useState('');
   
-  // --- NOVOS ESTADOS DE FILTRO ---
   const [filtroEscola, setFiltroEscola] = useState('');
   const [filtroEtapa, setFiltroEtapa] = useState('');
 
@@ -66,11 +68,8 @@ export default function ZeladoriasPage() {
     }
   };
 
-  // --- LÓGICA DE FILTRAGEM (CLIENT-SIDE) ---
   const processosFiltrados = processos.filter(proc => {
-    // Filtro de Escola
     if (filtroEscola && proc.escola_id !== filtroEscola) return false;
-    // Filtro de Etapa
     if (filtroEtapa && proc.etapa_atual.toString() !== filtroEtapa) return false;
     return true;
   });
@@ -80,13 +79,97 @@ export default function ZeladoriasPage() {
     setFiltroEtapa('');
   }
 
+  // --- FUNÇÃO DE PDF ATUALIZADA (CABEÇALHO NOVO) ---
+  const gerarRelatorioPDF = () => {
+    const doc = new jsPDF({ orientation: 'landscape' });
+    const pageWidth = doc.internal.pageSize.getWidth(); 
+
+    // 1. Fundo do Cabeçalho (Azul Institucional)
+    // Aumentei a altura para 40mm para caber todas as linhas
+    doc.setFillColor(37, 99, 235); 
+    doc.rect(0, 0, pageWidth, 40, 'F'); 
+    
+    doc.setTextColor(255, 255, 255); // Texto Branco
+
+    // LINHA 1: Diretoria (Título Principal)
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Unidade Regional de Ensino Guarulhos Sul", 14, 12);
+
+    // LINHA 2: Serviço
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Serviço de Obras e Manutenção Escolar", 14, 18);
+
+    // LINHA 3: Seção
+    doc.text("Seção de Fiscalização", 14, 23);
+
+    // TÍTULO DO RELATÓRIO (Destacado abaixo dos setores)
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Relatório de Processos de Zeladoria", 14, 34);
+
+    // 2. Dados da Tabela
+    const tableData = processosFiltrados.map(proc => {
+      const nomeEtapa = ETAPAS.find(e => e.id === proc.etapa_atual)?.label || 'Etapa Desconhecida';
+      return [
+        proc.escolas?.nome || 'N/A',
+        proc.nome_zelador,
+        proc.numero_sei || '-',
+        `${proc.etapa_atual}. ${nomeEtapa}`,
+        proc.isento_pagamento ? 'Sim' : 'Não',
+        proc.data_inicio ? new Date(proc.data_inicio).toLocaleDateString('pt-BR', {timeZone: 'UTC'}) : '-'
+      ];
+    });
+
+    // 3. Geração da Tabela
+    autoTable(doc, {
+      head: [['Escola', 'Zelador', 'Protocolo SEI', 'Etapa Atual', 'Isento', 'Início']],
+      body: tableData,
+      startY: 45, // Ajustado para começar abaixo do cabeçalho novo (40mm + margem)
+      theme: 'grid',
+      headStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [71, 85, 105],
+        fontStyle: 'bold',
+        lineWidth: 0.1,
+        lineColor: [203, 213, 225]
+      },
+      styles: {
+        fontSize: 9,
+        cellPadding: 3,
+        textColor: [51, 65, 85]
+      },
+      alternateRowStyles: {
+        fillColor: [250, 250, 250]
+      },
+      // Rodapé
+      didDrawPage: (data: any) => {
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const date = new Date().toLocaleDateString('pt-BR');
+        const time = new Date().toLocaleTimeString('pt-BR');
+        
+        doc.setDrawColor(203, 213, 225);
+        doc.line(14, pageHeight - 15, pageWidth - 14, pageHeight - 15);
+        
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`Exportado em ${date} às ${time}`, 14, pageHeight - 10);
+        
+        const str = `Página ${doc.getNumberOfPages()}`;
+        doc.text(str, pageWidth - 14 - doc.getTextWidth(str), pageHeight - 10);
+      }
+    });
+
+    doc.save(`zeladorias_GSU_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
   // --- ACTIONS ---
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     let res;
     if (isEditing) res = await updateZeladoriaData(currentId, formData);
     else res = await createZeladoria(formData);
-
     if (res.error) alert(res.error);
     else { alert(isEditing ? "Atualizado!" : "Criado!"); setShowModal(false); window.location.reload(); }
   };
@@ -172,44 +255,39 @@ export default function ZeladoriasPage() {
       <main className="flex-1 p-10 overflow-auto">
         <header className="flex justify-between mb-8">
           <h1 className="text-3xl font-black">Gestão de Zeladorias</h1>
-          {isAdmin && (
-            <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Processo</button>
-          )}
+          <div className="flex gap-2">
+            <button 
+                onClick={gerarRelatorioPDF}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-3 rounded-xl font-bold flex gap-2 transition-all border border-slate-200"
+                title="Exportar para PDF"
+            >
+                <FileDown size={20} /> <span className="hidden md:inline">Exportar PDF</span>
+            </button>
+
+            {isAdmin && (
+                <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Processo</button>
+            )}
+          </div>
         </header>
 
-        {/* --- BARRA DE FILTROS --- */}
+        {/* --- FILTROS --- */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 items-center">
             <div className="flex items-center gap-2 text-slate-500 font-bold text-sm">
                 <Filter size={18} /> Filtros:
             </div>
             
-            {/* Filtro Escola (Só Admin) */}
             {isAdmin && (
-                <select 
-                    value={filtroEscola} 
-                    onChange={e => setFiltroEscola(e.target.value)} 
-                    className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto"
-                >
+                <select value={filtroEscola} onChange={e => setFiltroEscola(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto">
                     <option value="">Todas as Escolas</option>
-                    {escolas.map(e => (
-                        <option key={e.id} value={e.id}>{e.nome}</option>
-                    ))}
+                    {escolas.map(e => (<option key={e.id} value={e.id}>{e.nome}</option>))}
                 </select>
             )}
 
-            {/* Filtro Etapa */}
-            <select 
-                value={filtroEtapa} 
-                onChange={e => setFiltroEtapa(e.target.value)} 
-                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto"
-            >
+            <select value={filtroEtapa} onChange={e => setFiltroEtapa(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto">
                 <option value="">Todas as Etapas</option>
-                {ETAPAS.map(etapa => (
-                    <option key={etapa.id} value={etapa.id}>{etapa.id} - {etapa.label}</option>
-                ))}
+                {ETAPAS.map(etapa => (<option key={etapa.id} value={etapa.id}>{etapa.id} - {etapa.label}</option>))}
             </select>
 
-            {/* Botão Limpar */}
             {(filtroEscola || filtroEtapa) && (
                 <button onClick={limparFiltros} className="flex items-center gap-1 text-sm text-red-500 font-bold hover:bg-red-50 px-3 py-2 rounded-xl transition-colors ml-auto md:ml-0">
                     <X size={16} /> Limpar
@@ -217,7 +295,7 @@ export default function ZeladoriasPage() {
             )}
         </div>
 
-        {/* Lista Filtrada */}
+        {/* LISTA */}
         <div className="space-y-8">
           {processosFiltrados.length === 0 && <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300"><p className="text-slate-400 font-medium">Nenhum processo encontrado.</p></div>}
 
@@ -276,7 +354,7 @@ export default function ZeladoriasPage() {
           })}
         </div>
 
-        {/* Modal Único */}
+        {/* Modal */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-lg animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">

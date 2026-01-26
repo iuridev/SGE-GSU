@@ -1,10 +1,21 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote } from 'lucide-react';
+import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote, BarChart3 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
 import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
 import Link from 'next/link';
+
+// Definição das Etapas para o Gráfico
+const NOMES_ETAPAS = [
+  "1. Processo SEI",
+  "2. Vistoria e Relatório",
+  "3. Análise do SEFISC",
+  "4. Laudo do CECIG",
+  "5. Ciência do Valor",
+  "6. Aut. Casa Civil",
+  "7. Assinatura do Termo"
+];
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -14,7 +25,10 @@ export default function Dashboard() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [zeladorias, setZeladorias] = useState<any[]>([]); 
   const [alertasVencimento, setAlertasVencimento] = useState<any[]>([]); 
+  
+  // Estatísticas
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
+  const [etapasCount, setEtapasCount] = useState<number[]>(new Array(7).fill(0)); // Contagem por etapa
 
   // Dados Auxiliares
   const [escolas, setEscolas] = useState<any[]>([]);
@@ -53,6 +67,19 @@ export default function Dashboard() {
     
     if (dataZel) {
         setZeladorias(dataZel);
+        
+        // --- CÁLCULOS ESTATÍSTICOS ---
+        const counts = new Array(7).fill(0);
+        
+        dataZel.forEach(z => {
+            // Garante que etapa_atual está entre 1 e 7
+            if (z.etapa_atual >= 1 && z.etapa_atual <= 7) {
+                counts[z.etapa_atual - 1]++;
+            }
+        });
+        
+        setEtapasCount(counts);
+
         setStats({
             total: dataZel.length,
             emAndamento: dataZel.filter(z => z.etapa_atual < 7).length,
@@ -60,6 +87,7 @@ export default function Dashboard() {
             isentos: dataZel.filter(z => z.isento_pagamento).length
         });
 
+        // Alertas de Vencimento
         const hoje = new Date();
         const alertas = dataZel
             .filter(z => z.etapa_atual >= 6 && z.data_etapa_6)
@@ -142,7 +170,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* --- SEÇÃO: MÓDULO ZELADORIA --- */}
+        {/* --- MÓDULO ZELADORIA --- */}
         <section className="mb-16">
             <div className="flex items-center gap-4 mb-6">
                 <div className="p-3 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-600/20">
@@ -154,92 +182,124 @@ export default function Dashboard() {
                 </div>
             </div>
 
+            {/* CARDS PRINCIPAIS */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                {/* Card 1: Total */}
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
                     <div className="absolute right-[-10px] top-[-10px] bg-blue-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
                     <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Total de Zeladorias</span>
                     <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-                            <Home size={24} />
-                        </div>
+                        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div>
                         <span className="text-4xl font-black text-slate-800">{stats.total}</span>
                     </div>
                 </div>
 
-                {/* Card 2: Em Andamento */}
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
                     <div className="absolute right-[-10px] top-[-10px] bg-orange-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
                     <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Em Andamento</span>
                     <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-orange-50 text-orange-600 rounded-xl">
-                            <Clock size={24} />
-                        </div>
+                        <div className="p-3 bg-orange-50 text-orange-600 rounded-xl"><Clock size={24} /></div>
                         <span className="text-4xl font-black text-slate-800">{stats.emAndamento}</span>
                     </div>
                 </div>
 
-                {/* Card 3: Concluídos */}
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
                     <div className="absolute right-[-10px] top-[-10px] bg-green-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
                     <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Concluídos (Vigentes)</span>
                     <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-green-50 text-green-600 rounded-xl">
-                            <CheckCircle2 size={24} />
-                        </div>
+                        <div className="p-3 bg-green-50 text-green-600 rounded-xl"><CheckCircle2 size={24} /></div>
                         <span className="text-4xl font-black text-slate-800">{stats.concluidos}</span>
                     </div>
                 </div>
 
-                {/* Card 4: Isentos */}
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden group hover:shadow-md transition-all">
                     <div className="absolute right-[-10px] top-[-10px] bg-purple-50 w-24 h-24 rounded-full opacity-50 group-hover:scale-110 transition-transform"></div>
                     <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Isentos de Pagamento</span>
                     <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-purple-50 text-purple-600 rounded-xl">
-                            <Banknote size={24} />
-                        </div>
+                        <div className="p-3 bg-purple-50 text-purple-600 rounded-xl"><Banknote size={24} /></div>
                         <span className="text-4xl font-black text-slate-800">{stats.isentos}</span>
                     </div>
                 </div>
             </div>
 
-            {/* Alertas de Zeladoria */}
-            {alertasVencimento.length > 0 && (
-                <div className="animate-in fade-in slide-in-from-top-4 duration-500 bg-red-50/50 p-6 rounded-3xl border border-red-100">
-                    <div className="flex items-center gap-2 mb-4">
-                        <AlertTriangle className="text-red-500 animate-pulse"/>
-                        <h3 className="text-lg font-bold text-slate-800">Alertas de Vencimento (Zeladoria)</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* --- GRÁFICO DE BARRAS (FUNIL) --- */}
+                <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                    <div className="flex items-center gap-2 mb-6">
+                        <BarChart3 className="text-blue-600" />
+                        <h3 className="text-lg font-bold text-slate-800">Distribuição por Etapa</h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {alertasVencimento.map(alerta => (
-                            <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-1">
-                                <h4 className="font-bold text-slate-800">{alerta.escolas?.nome}</h4>
-                                <p className="text-sm text-slate-600">{alerta.nome_zelador}</p>
-                                <div className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit text-xs font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
-                                    <Clock size={12}/>
-                                    {alerta.diasRestantes < 0 ? `Venceu há ${Math.abs(alerta.diasRestantes)} dias` : `Vence em ${alerta.diasRestantes} dias`}
+                    
+                    <div className="space-y-5">
+                        {NOMES_ETAPAS.map((nome, index) => {
+                            const count = etapasCount[index];
+                            const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
+                            const isConcluido = index === 6; // Etapa 7 é a última
+                            
+                            return (
+                                <div key={index} className="group">
+                                    <div className="flex justify-between items-center mb-1.5">
+                                        <span className={`text-sm font-bold ${count > 0 ? 'text-slate-700' : 'text-slate-400'}`}>
+                                            {nome}
+                                        </span>
+                                        <span className={`text-sm font-black ${isConcluido ? 'text-green-600' : 'text-blue-600'}`}>
+                                            {count} <span className="text-xs text-slate-400 font-normal">processos</span>
+                                        </span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                                        <div 
+                                            className={`h-full rounded-full transition-all duration-1000 ease-out ${isConcluido ? 'bg-green-500' : 'bg-blue-500'}`}
+                                            style={{ width: `${percentage > 0 ? Math.max(percentage, 2) : 0}%` }}
+                                        ></div>
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
-            )}
+
+                {/* --- ALERTAS DE VENCIMENTO --- */}
+                <div className="lg:col-span-1">
+                    {alertasVencimento.length > 0 ? (
+                        <div className="bg-red-50/50 p-6 rounded-3xl border border-red-100 h-full">
+                            <div className="flex items-center gap-2 mb-4">
+                                <AlertTriangle className="text-red-500 animate-pulse"/>
+                                <h3 className="text-lg font-bold text-slate-800">Vencimentos</h3>
+                            </div>
+                            <div className="flex flex-col gap-3">
+                                {alertasVencimento.map(alerta => (
+                                    <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-1">
+                                        <h4 className="font-bold text-slate-800 text-sm truncate">{alerta.escolas?.nome}</h4>
+                                        <p className="text-xs text-slate-500">{alerta.nome_zelador}</p>
+                                        <div className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg w-fit text-[10px] font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                                            <Clock size={10}/>
+                                            {alerta.diasRestantes < 0 ? `Venceu há ${Math.abs(alerta.diasRestantes)} dias` : `Vence em ${alerta.diasRestantes} dias`}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="bg-green-50/50 p-8 rounded-3xl border border-green-100 h-full flex flex-col items-center justify-center text-center gap-4">
+                            <div className="bg-green-100 p-4 rounded-full text-green-600"><CheckCircle2 size={32}/></div>
+                            <div>
+                                <h3 className="font-bold text-green-800 text-lg">Tudo em dia!</h3>
+                                <p className="text-green-600 text-sm">Nenhum contrato vencendo nos próximos 90 dias.</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
         </section>
 
-        {/* --- SEÇÃO: SISTEMA / USUÁRIOS --- */}
+        {/* --- SISTEMA / USUÁRIOS --- */}
         <section className="border-t border-slate-200 pt-10">
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-3">
-                    <div className="p-2 bg-slate-100 rounded-xl text-slate-500">
-                        <Users size={20} />
-                    </div>
+                    <div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Users size={20} /></div>
                     <h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2>
                 </div>
                 {usuarioLogado?.is_admin && (
-                    <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2">
-                        <Plus size={16}/> Adicionar Usuário
-                    </button>
+                    <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"><Plus size={16}/> Adicionar Usuário</button>
                 )}
             </div>
             
