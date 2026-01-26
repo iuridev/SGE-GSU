@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// Adicionei o ícone 'Edit'
-import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, Clock, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, AlertTriangle, Edit } from 'lucide-react';
+// Adicionei o ícone 'Filter' e 'X'
+import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, Clock, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, AlertTriangle, Edit, Filter, X } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-// Importe a nova função updateZeladoriaData
 import { createZeladoria, updateZeladoriaEtapa, arquivarZeladoria, updateZeladoriaData } from '../actions';
 import Link from 'next/link';
 
@@ -25,9 +24,13 @@ export default function ZeladoriasPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showModal, setShowModal] = useState(false);
   
-  // Estados para Edição
+  // Estados para Edição e Filtros
   const [isEditing, setIsEditing] = useState(false);
   const [currentId, setCurrentId] = useState('');
+  
+  // --- NOVOS ESTADOS DE FILTRO ---
+  const [filtroEscola, setFiltroEscola] = useState('');
+  const [filtroEtapa, setFiltroEtapa] = useState('');
 
   const [formData, setFormData] = useState({ 
     escola_id: '', nome_zelador: '', cpf_zelador: '', numero_sei: '', cargo_zelador: '', data_inicio: '',
@@ -63,33 +66,34 @@ export default function ZeladoriasPage() {
     }
   };
 
-  // --- FUNÇÕES DE AÇÃO ---
-  
+  // --- LÓGICA DE FILTRAGEM (CLIENT-SIDE) ---
+  const processosFiltrados = processos.filter(proc => {
+    // Filtro de Escola
+    if (filtroEscola && proc.escola_id !== filtroEscola) return false;
+    // Filtro de Etapa
+    if (filtroEtapa && proc.etapa_atual.toString() !== filtroEtapa) return false;
+    return true;
+  });
+
+  const limparFiltros = () => {
+    setFiltroEscola('');
+    setFiltroEtapa('');
+  }
+
+  // --- ACTIONS ---
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     let res;
-    if (isEditing) {
-      // Chama a função de atualização
-      res = await updateZeladoriaData(currentId, formData);
-    } else {
-      // Chama a função de criação
-      res = await createZeladoria(formData);
-    }
+    if (isEditing) res = await updateZeladoriaData(currentId, formData);
+    else res = await createZeladoria(formData);
 
     if (res.error) alert(res.error);
-    else { 
-      alert(isEditing ? "Dados atualizados!" : "Processo iniciado!"); 
-      setShowModal(false); 
-      window.location.reload(); 
-    }
+    else { alert(isEditing ? "Atualizado!" : "Criado!"); setShowModal(false); window.location.reload(); }
   };
 
   const openNew = () => {
     setFormData({ escola_id: '', nome_zelador: '', cpf_zelador: '', numero_sei: '', cargo_zelador: '', data_inicio: '', isento_pagamento: false });
-    setIsEditing(false);
-    setCurrentId('');
-    setShowModal(true);
+    setIsEditing(false); setCurrentId(''); setShowModal(true);
   }
 
   const openEdit = (proc: any) => {
@@ -99,26 +103,22 @@ export default function ZeladoriasPage() {
       cpf_zelador: proc.cpf_zelador,
       numero_sei: proc.numero_sei,
       cargo_zelador: proc.cargo_zelador,
-      data_inicio: proc.data_inicio ? proc.data_inicio.split('T')[0] : '', // Formata para o input date
+      data_inicio: proc.data_inicio ? proc.data_inicio.split('T')[0] : '',
       isento_pagamento: proc.isento_pagamento
     });
-    setIsEditing(true);
-    setCurrentId(proc.id);
-    setShowModal(true);
+    setIsEditing(true); setCurrentId(proc.id); setShowModal(true);
   }
 
   const avanvarEtapa = async (id: string, etapaAtual: number) => {
     if (etapaAtual >= 7) return;
-    if (!confirm(`Confirmar conclusão da etapa "${ETAPAS[etapaAtual-1].label}"?`)) return;
+    if (!confirm(`Confirmar conclusão da etapa?`)) return;
     const res = await updateZeladoriaEtapa(id, etapaAtual + 1);
-    if (res.error) alert(res.error);
-    else window.location.reload();
+    if (res.error) alert(res.error); else window.location.reload();
   };
 
   const arquivar = async (id: string) => {
-    if (!confirm("Tem certeza?")) return;
-    await arquivarZeladoria(id);
-    window.location.reload();
+    if (!confirm("Arquivar processo?")) return;
+    await arquivarZeladoria(id); window.location.reload();
   }
 
   const getValidadeInfo = (proc: any) => {
@@ -135,7 +135,6 @@ export default function ZeladoriasPage() {
   };
 
   const RenderStepper = ({ processo }: { processo: any }) => {
-     // ... (Mesmo código do Stepper) ...
      return (
       <div className="relative flex flex-col md:flex-row justify-between items-start md:items-center w-full mt-6 px-2 gap-4 md:gap-0">
         <div className="absolute top-4 left-0 w-full h-1 bg-slate-100 -z-10 hidden md:block"></div>
@@ -171,17 +170,58 @@ export default function ZeladoriasPage() {
       </aside>
 
       <main className="flex-1 p-10 overflow-auto">
-        <header className="flex justify-between mb-10">
+        <header className="flex justify-between mb-8">
           <h1 className="text-3xl font-black">Gestão de Zeladorias</h1>
           {isAdmin && (
             <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Processo</button>
           )}
         </header>
 
-        <div className="space-y-8">
-          {processos.length === 0 && <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300"><p className="text-slate-400 font-medium">Nenhum processo.</p></div>}
+        {/* --- BARRA DE FILTROS --- */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 items-center">
+            <div className="flex items-center gap-2 text-slate-500 font-bold text-sm">
+                <Filter size={18} /> Filtros:
+            </div>
+            
+            {/* Filtro Escola (Só Admin) */}
+            {isAdmin && (
+                <select 
+                    value={filtroEscola} 
+                    onChange={e => setFiltroEscola(e.target.value)} 
+                    className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto"
+                >
+                    <option value="">Todas as Escolas</option>
+                    {escolas.map(e => (
+                        <option key={e.id} value={e.id}>{e.nome}</option>
+                    ))}
+                </select>
+            )}
 
-          {processos.map(proc => {
+            {/* Filtro Etapa */}
+            <select 
+                value={filtroEtapa} 
+                onChange={e => setFiltroEtapa(e.target.value)} 
+                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-xl p-2.5 focus:ring-blue-500 outline-none w-full md:w-auto"
+            >
+                <option value="">Todas as Etapas</option>
+                {ETAPAS.map(etapa => (
+                    <option key={etapa.id} value={etapa.id}>{etapa.id} - {etapa.label}</option>
+                ))}
+            </select>
+
+            {/* Botão Limpar */}
+            {(filtroEscola || filtroEtapa) && (
+                <button onClick={limparFiltros} className="flex items-center gap-1 text-sm text-red-500 font-bold hover:bg-red-50 px-3 py-2 rounded-xl transition-colors ml-auto md:ml-0">
+                    <X size={16} /> Limpar
+                </button>
+            )}
+        </div>
+
+        {/* Lista Filtrada */}
+        <div className="space-y-8">
+          {processosFiltrados.length === 0 && <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300"><p className="text-slate-400 font-medium">Nenhum processo encontrado.</p></div>}
+
+          {processosFiltrados.map(proc => {
             const validade = getValidadeInfo(proc);
             return (
               <div key={proc.id} className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
@@ -191,7 +231,7 @@ export default function ZeladoriasPage() {
                       <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg text-xs font-bold uppercase">{proc.escolas?.nome}</span>
                       <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-purple-100"><Hash size={12}/> SEI: {proc.numero_sei || 'N/A'}</span>
                       {proc.isento_pagamento ? (
-                        <span className="bg-green-50 text-green-700 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-green-100"><Banknote size={12}/> Isento de Pagamento</span>
+                        <span className="bg-green-50 text-green-700 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-green-100"><Banknote size={12}/> Isento</span>
                       ) : (
                         <span className="bg-slate-100 text-slate-500 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-slate-200"><Banknote size={12}/> Pagamento Mensal</span>
                       )}
@@ -199,9 +239,8 @@ export default function ZeladoriasPage() {
 
                     <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                         <FileText size={20} className="text-slate-400"/> {proc.nome_zelador}
-                        {/* Botão de Editar visível apenas para Admin */}
                         {isAdmin && (
-                            <button onClick={() => openEdit(proc)} className="ml-2 p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar Dados">
+                            <button onClick={() => openEdit(proc)} className="ml-2 p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
                                 <Edit size={16}/>
                             </button>
                         )}
@@ -223,7 +262,7 @@ export default function ZeladoriasPage() {
                   {isAdmin && (
                     <div className="flex gap-2">
                       {proc.etapa_atual < 7 ? (
-                        <button onClick={() => avanvarEtapa(proc.id, proc.etapa_atual)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-bold flex gap-2 shadow-lg"><ArrowRight size={16} /> Próxima Etapa</button>
+                        <button onClick={() => avanvarEtapa(proc.id, proc.etapa_atual)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-bold flex gap-2 shadow-lg"><ArrowRight size={16} /> Próxima</button>
                       ) : (
                         <div className="bg-green-100 text-green-700 px-4 py-2 rounded-xl text-sm font-bold flex gap-2"><CheckCircle2 size={16}/> Concluído</div>
                       )}
@@ -237,7 +276,7 @@ export default function ZeladoriasPage() {
           })}
         </div>
 
-        {/* Modal Único (Criar/Editar) */}
+        {/* Modal Único */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-lg animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
