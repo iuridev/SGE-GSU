@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote, BarChart3 } from 'lucide-react';
+// Adicionei o ícone 'Presentation'
+import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote, BarChart3, Presentation } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
 import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
 import Link from 'next/link';
 
-// Definição das Etapas para o Gráfico
 const NOMES_ETAPAS = [
   "1. Processo SEI",
   "2. Vistoria e Relatório",
@@ -28,7 +28,7 @@ export default function Dashboard() {
   
   // Estatísticas
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
-  const [etapasCount, setEtapasCount] = useState<number[]>(new Array(7).fill(0)); // Contagem por etapa
+  const [etapasCount, setEtapasCount] = useState<number[]>(new Array(7).fill(0));
 
   // Dados Auxiliares
   const [escolas, setEscolas] = useState<any[]>([]);
@@ -58,7 +58,6 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
-    // 1. Carregar Zeladorias
     let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
     if (!userProfile.is_admin && userProfile.escola_id) {
         queryZel = queryZel.eq('escola_id', userProfile.escola_id);
@@ -68,16 +67,12 @@ export default function Dashboard() {
     if (dataZel) {
         setZeladorias(dataZel);
         
-        // --- CÁLCULOS ESTATÍSTICOS ---
         const counts = new Array(7).fill(0);
-        
         dataZel.forEach(z => {
-            // Garante que etapa_atual está entre 1 e 7
             if (z.etapa_atual >= 1 && z.etapa_atual <= 7) {
                 counts[z.etapa_atual - 1]++;
             }
         });
-        
         setEtapasCount(counts);
 
         setStats({
@@ -87,7 +82,6 @@ export default function Dashboard() {
             isentos: dataZel.filter(z => z.isento_pagamento).length
         });
 
-        // Alertas de Vencimento
         const hoje = new Date();
         const alertas = dataZel
             .filter(z => z.etapa_atual >= 6 && z.data_etapa_6)
@@ -104,7 +98,6 @@ export default function Dashboard() {
         setAlertasVencimento(alertas);
     }
 
-    // 2. Carregar Usuários
     let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
     if (!userProfile.is_admin && userProfile.escola_id) {
       queryUser = queryUser.eq('escola_id', userProfile.escola_id);
@@ -158,6 +151,12 @@ export default function Dashboard() {
           {usuarioLogado?.is_admin && (
             <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>
           )}
+          
+          {/* BOTÃO DE APRESENTAÇÃO */}
+          <Link href="/apresentacao" className="flex items-center gap-3 p-3 text-yellow-400 hover:text-white hover:bg-yellow-600/20 rounded-xl transition-all border border-dashed border-yellow-600/30 mt-4">
+            <Presentation size={20} /> <span>Apresentação</span>
+          </Link>
+
         </nav>
         <button onClick={async () => { await supabase.auth.signOut(); window.location.href = '/login'; }} className="flex items-center gap-3 p-3 text-slate-400 hover:text-red-400 rounded-xl"><LogOut size={20} /> <span>Sair</span></button>
       </aside>
