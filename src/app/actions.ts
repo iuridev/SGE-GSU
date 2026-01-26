@@ -35,7 +35,7 @@ async function checkAdminPermission() {
 }
 
 // ==========================================
-//              AÇÕES DE ESCOLA
+//              AÇÕES DE ESCOLA (ATUALIZADO)
 // ==========================================
 
 export async function createEscola(data: any) {
@@ -44,8 +44,6 @@ export async function createEscola(data: any) {
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    
-    // CORREÇÃO: Especificamos os campos para evitar enviar 'id' vazio ("")
     const { error } = await supabaseAdmin.from('escolas').insert({
       nome: data.nome,
       cidade: data.cidade,
@@ -53,7 +51,8 @@ export async function createEscola(data: any) {
       email: data.email,
       telefone: data.telefone,
       diretor: data.diretor,
-      polo: data.polo
+      polo: data.polo,
+      fiscal_id: data.fiscal_id || null // Agora salvamos o ID
     });
 
     if (error) throw error;
@@ -74,7 +73,8 @@ export async function updateEscola(id: string, data: any) {
       email: data.email,
       telefone: data.telefone,
       diretor: data.diretor,
-      polo: data.polo
+      polo: data.polo,
+      fiscal_id: data.fiscal_id || null // Atualiza o ID
     }).eq('id', id);
 
     if (error) throw error;
@@ -228,6 +228,28 @@ export async function updateZeladoriaEtapa(id: string, novaEtapa: number) {
   } catch (error: any) { return { error: error.message }; }
 }
 
+// --- NOVA FUNÇÃO: EXCLUIR ESCOLA ---
+export async function deleteEscola(id: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    
+    // Tenta excluir. Se houver dependências sem CASCADE (ex: usuários vinculados), o banco retornará erro.
+    const { error } = await supabaseAdmin.from('escolas').delete().eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { 
+    // Trata erro comum de chave estrangeira para mensagem mais amigável
+    if (error.code === '23503') {
+        return { error: 'Não é possível excluir esta escola pois ela possui vínculos (usuários, processos, etc). Remova os vínculos antes.' };
+    }
+    return { error: error.message }; 
+  }
+}
+
 export async function updateZeladoriaData(id: string, data: {
   escola_id: string; 
   nome_zelador: string; 
@@ -351,3 +373,50 @@ export async function deleteFiscalizacaoEvent(id: string) {
     return { success: true };
   } catch (error: any) { return { error: error.message }; }
 }
+
+
+
+// ==========================================
+//              AÇÕES DE FISCAIS (NOVO)
+// ==========================================
+
+export async function getFiscais() {
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return undefined } } } // Leitura pública simplificada ou use cookies
+  )
+  
+  const { data, error } = await supabase.from('fiscais').select('*').order('nome');
+  if (error) return [];
+  return data;
+}
+
+export async function createFiscal(data: any) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('fiscais').insert(data);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+export async function deleteFiscal(id: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    // Verifica se tem escola vinculada antes de apagar
+    const { count } = await supabaseAdmin.from('escolas').select('*', { count: 'exact', head: true }).eq('fiscal_id', id);
+    if (count && count > 0) return { error: 'Não é possível excluir: Este fiscal está vinculado a escolas.' };
+
+    const { error } = await supabaseAdmin.from('fiscais').delete().eq('id', id);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
