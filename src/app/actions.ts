@@ -44,7 +44,18 @@ export async function createEscola(data: any) {
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('escolas').insert(data);
+    
+    // CORREÇÃO: Especificamos os campos para evitar enviar 'id' vazio ("")
+    const { error } = await supabaseAdmin.from('escolas').insert({
+      nome: data.nome,
+      cidade: data.cidade,
+      estado: data.estado,
+      email: data.email,
+      telefone: data.telefone,
+      diretor: data.diretor,
+      polo: data.polo
+    });
+
     if (error) throw error;
     return { success: true };
   } catch (error: any) { return { error: error.message }; }
@@ -217,7 +228,6 @@ export async function updateZeladoriaEtapa(id: string, novaEtapa: number) {
   } catch (error: any) { return { error: error.message }; }
 }
 
-// --- A FUNÇÃO QUE FALTAVA ---
 export async function updateZeladoriaData(id: string, data: {
   escola_id: string; 
   nome_zelador: string; 
