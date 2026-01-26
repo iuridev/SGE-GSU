@@ -1,17 +1,23 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { School, ShieldCheck, Plus, Loader2, ArrowLeft, Building2, MapPin, User, Phone, Mail, Edit } from 'lucide-react';
+// Adicionei icones de filtro e busca (Filter, Search, X)
+import { School, ShieldCheck, Plus, Loader2, ArrowLeft, Building2, MapPin, User, Phone, Mail, Edit, Filter, Search, X } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createEscola, updateEscola } from '../actions'; // Importe updateEscola
+import { createEscola, updateEscola } from '../actions';
 import Link from 'next/link';
 
 export default function EscolasPage() {
   const [loading, setLoading] = useState(true);
   const [escolas, setEscolas] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
-  const [isEditing, setIsEditing] = useState(false); // Estado para controle de edição
+  const [isEditing, setIsEditing] = useState(false);
   
+  // --- NOVOS ESTADOS DE FILTRO ---
+  const [filtroNome, setFiltroNome] = useState('');
+  const [filtroPolo, setFiltroPolo] = useState('');
+  const [filtroDiretor, setFiltroDiretor] = useState('');
+
   const [formData, setFormData] = useState({ 
     id: '', nome: '', cidade: '', estado: '', email: '', telefone: '', diretor: '', polo: '' 
   });
@@ -38,6 +44,24 @@ export default function EscolasPage() {
     if (data) setEscolas(data);
   };
 
+  // --- LÓGICA DE FILTRAGEM ---
+  const escolasFiltradas = escolas.filter(escola => {
+    const matchNome = escola.nome.toLowerCase().includes(filtroNome.toLowerCase());
+    const matchDiretor = escola.diretor?.toLowerCase().includes(filtroDiretor.toLowerCase()) ?? true;
+    // Para o polo, convertemos para string para permitir busca parcial (ex: digitar "1" acha polo 1 e 10)
+    const matchPolo = filtroPolo ? escola.polo.toString().includes(filtroPolo) : true;
+
+    return matchNome && matchDiretor && matchPolo;
+  });
+
+  const limparFiltros = () => {
+    setFiltroNome('');
+    setFiltroPolo('');
+    setFiltroDiretor('');
+  }
+
+  // --- ACTIONS ---
+
   const openCreate = () => {
     setFormData({ id: '', nome: '', cidade: '', estado: '', email: '', telefone: '', diretor: '', polo: '' });
     setIsEditing(false);
@@ -45,7 +69,7 @@ export default function EscolasPage() {
   }
 
   const openEdit = (escola: any) => {
-    setFormData({ ...escola, polo: escola.polo.toString() }); // Converte polo p/ string pro input
+    setFormData({ ...escola, polo: escola.polo.toString() });
     setIsEditing(true);
     setShowModal(true);
   }
@@ -69,7 +93,7 @@ export default function EscolasPage() {
     }
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin"/></div>;
+  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600"/></div>;
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
@@ -82,19 +106,71 @@ export default function EscolasPage() {
       </aside>
 
       <main className="flex-1 p-10 overflow-auto">
-        <header className="flex justify-between mb-10">
+        <header className="flex justify-between mb-8">
           <h1 className="text-3xl font-black">Escolas</h1>
-          <button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2"><Plus /> Nova Escola</button>
+          <button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Nova Escola</button>
         </header>
 
+        {/* --- BARRA DE FILTROS --- */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 items-center">
+            <div className="flex items-center gap-2 text-slate-500 font-bold text-sm min-w-fit">
+                <Filter size={18} /> Filtros:
+            </div>
+
+            {/* Filtro Nome */}
+            <div className="relative w-full md:w-auto flex-1">
+                <Search size={16} className="absolute left-3 top-3 text-slate-400"/>
+                <input 
+                    placeholder="Buscar por nome da escola..." 
+                    value={filtroNome}
+                    onChange={e => setFiltroNome(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 pl-10 p-2.5 rounded-xl text-sm focus:ring-blue-500 outline-none"
+                />
+            </div>
+
+            {/* Filtro Diretor */}
+            <div className="relative w-full md:w-auto flex-1">
+                <User size={16} className="absolute left-3 top-3 text-slate-400"/>
+                <input 
+                    placeholder="Buscar por diretor..." 
+                    value={filtroDiretor}
+                    onChange={e => setFiltroDiretor(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 pl-10 p-2.5 rounded-xl text-sm focus:ring-blue-500 outline-none"
+                />
+            </div>
+
+            {/* Filtro Polo */}
+            <div className="relative w-full md:w-40">
+                <input 
+                    placeholder="Polo (Nº)" 
+                    type="number"
+                    value={filtroPolo}
+                    onChange={e => setFiltroPolo(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-sm focus:ring-blue-500 outline-none"
+                />
+            </div>
+
+            {/* Botão Limpar */}
+            {(filtroNome || filtroPolo || filtroDiretor) && (
+                <button onClick={limparFiltros} className="flex items-center gap-1 text-sm text-red-500 font-bold hover:bg-red-50 px-3 py-2 rounded-xl transition-colors ml-auto md:ml-0">
+                    <X size={16} /> Limpar
+                </button>
+            )}
+        </div>
+
+        {/* --- LISTA DE ESCOLAS (FILTRADA) --- */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {escolas.map(escola => (
-            <div key={escola.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-3 group">
+          {escolasFiltradas.length === 0 && (
+             <div className="col-span-full text-center py-20 text-slate-400 font-medium">Nenhuma escola encontrada com esses filtros.</div>
+          )}
+
+          {escolasFiltradas.map(escola => (
+            <div key={escola.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-3 group hover:shadow-md transition-all">
               <div className="flex justify-between items-start">
                 <div className="flex gap-3">
                   <div className="p-3 bg-blue-50 rounded-xl text-blue-600 h-fit"><Building2 size={24} /></div>
                   <div>
-                    <h3 className="font-bold text-lg">{escola.nome}</h3>
+                    <h3 className="font-bold text-lg text-slate-800">{escola.nome}</h3>
                     <span className="text-xs font-bold uppercase text-purple-600 bg-purple-50 px-2 py-1 rounded-md">Polo {escola.polo}</span>
                   </div>
                 </div>
@@ -111,6 +187,7 @@ export default function EscolasPage() {
           ))}
         </div>
 
+        {/* Modal (Mantido Igual) */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
              <div className="bg-white rounded-3xl p-6 w-full max-w-2xl animate-in zoom-in duration-200">
