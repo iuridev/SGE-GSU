@@ -27,7 +27,7 @@ async function checkAdminPermission() {
   )
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { allowed: false, error: 'Não autenticado.' }
-
+  
   const { data: userProfile } = await supabase.from('usuarios').select('perfil').eq('email', user.email).single()
   if (userProfile?.perfil !== 'Regional') return { allowed: false, error: 'Acesso negado.' }
 
@@ -108,7 +108,6 @@ export async function createNewUser(formData: any) {
   } catch (error: any) { return { error: error.message } }
 }
 
-// --- NOVO: EDITAR USUÁRIO ---
 export async function updateSystemUser(userId: string, data: any) {
   const perm = await checkAdminPermission();
   if (!perm.allowed) return { error: perm.error };
@@ -116,14 +115,12 @@ export async function updateSystemUser(userId: string, data: any) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 1. Atualiza no Auth (Login) - Importante para o email funcionar
     const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       email: data.email,
       user_metadata: { nome: data.nome }
     });
     if (authError) return { error: 'Erro Auth: ' + authError.message };
 
-    // 2. Atualiza no Banco de Dados
     const { error: dbError } = await supabaseAdmin.from('usuarios').update({
       nome: data.nome,
       email: data.email,
@@ -137,7 +134,6 @@ export async function updateSystemUser(userId: string, data: any) {
   } catch (error: any) { return { error: error.message }; }
 }
 
-// --- NOVO: RESETAR SENHA ---
 export async function resetUserPassword(userId: string, newPassword: string) {
   const perm = await checkAdminPermission();
   if (!perm.allowed) return { error: perm.error };
@@ -171,6 +167,7 @@ export async function deleteSystemUser(userId: string) {
 // ==========================================
 //              AÇÕES DE ZELADORIA
 // ==========================================
+
 export async function createZeladoria(data: { 
   escola_id: string; 
   nome_zelador: string; 
@@ -178,14 +175,13 @@ export async function createZeladoria(data: {
   numero_sei: string;
   cargo_zelador: string;
   data_inicio: string;
-  isento_pagamento: boolean; // <--- Novo Campo
+  isento_pagamento: boolean;
 }) {
   const perm = await checkAdminPermission();
   if (!perm.allowed) return { error: perm.error };
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    
     const { error } = await supabaseAdmin.from('zeladorias').insert({
       escola_id: data.escola_id,
       nome_zelador: data.nome_zelador,
@@ -193,7 +189,7 @@ export async function createZeladoria(data: {
       numero_sei: data.numero_sei,
       cargo_zelador: data.cargo_zelador,
       data_inicio: data.data_inicio,
-      isento_pagamento: data.isento_pagamento, // Salva no banco
+      isento_pagamento: data.isento_pagamento,
       etapa_atual: 1,
       data_etapa_1: new Date().toISOString()
     });
@@ -203,25 +199,48 @@ export async function createZeladoria(data: {
   } catch (error: any) { return { error: error.message }; }
 }
 
-
 export async function updateZeladoriaEtapa(id: string, novaEtapa: number) {
   const perm = await checkAdminPermission();
   if (!perm.allowed) return { error: perm.error };
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-
-    // Monta o objeto dinâmico: Se avançar para etapa 3, salva data_etapa_3
     const campoData = `data_etapa_${novaEtapa}`;
-    const updateData: any = {
+    const updateData: any = { 
       etapa_atual: novaEtapa,
-      [campoData]: new Date().toISOString() // Marca a data de hoje na etapa nova
+      [campoData]: new Date().toISOString()
     };
-
-    // Se for a última etapa (7), podemos marcar como Concluído se quiser
-    // if (novaEtapa === 7) updateData.status = 'Concluído';
-
     const { error } = await supabaseAdmin.from('zeladorias').update(updateData).eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+// --- A FUNÇÃO QUE FALTAVA ---
+export async function updateZeladoriaData(id: string, data: {
+  escola_id: string; 
+  nome_zelador: string; 
+  cpf_zelador: string;
+  numero_sei: string;
+  cargo_zelador: string;
+  data_inicio: string;
+  isento_pagamento: boolean;
+}) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('zeladorias').update({
+      escola_id: data.escola_id,
+      nome_zelador: data.nome_zelador,
+      cpf_zelador: data.cpf_zelador,
+      numero_sei: data.numero_sei,
+      cargo_zelador: data.cargo_zelador,
+      data_inicio: data.data_inicio,
+      isento_pagamento: data.isento_pagamento
+    }).eq('id', id);
 
     if (error) throw error;
     return { success: true };

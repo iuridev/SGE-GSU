@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// Adicionei icones novos: Banknote, CalendarClock, AlertTriangle
-import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, Clock, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, AlertTriangle } from 'lucide-react';
+// Adicionei o ícone 'Edit'
+import { ShieldCheck, Plus, Loader2, ArrowLeft, Home, CheckCircle2, Clock, FileText, ArrowRight, Archive, Briefcase, Hash, Banknote, CalendarClock, AlertTriangle, Edit } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createZeladoria, updateZeladoriaEtapa, arquivarZeladoria } from '../actions';
+// Importe a nova função updateZeladoriaData
+import { createZeladoria, updateZeladoriaEtapa, arquivarZeladoria, updateZeladoriaData } from '../actions';
 import Link from 'next/link';
 
 const ETAPAS = [
@@ -24,10 +25,13 @@ export default function ZeladoriasPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showModal, setShowModal] = useState(false);
   
-  // State Atualizado
+  // Estados para Edição
+  const [isEditing, setIsEditing] = useState(false);
+  const [currentId, setCurrentId] = useState('');
+
   const [formData, setFormData] = useState({ 
     escola_id: '', nome_zelador: '', cpf_zelador: '', numero_sei: '', cargo_zelador: '', data_inicio: '',
-    isento_pagamento: false // Novo estado boolean
+    isento_pagamento: false
   });
 
   useEffect(() => {
@@ -59,12 +63,49 @@ export default function ZeladoriasPage() {
     }
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
+  // --- FUNÇÕES DE AÇÃO ---
+  
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await createZeladoria(formData);
+    
+    let res;
+    if (isEditing) {
+      // Chama a função de atualização
+      res = await updateZeladoriaData(currentId, formData);
+    } else {
+      // Chama a função de criação
+      res = await createZeladoria(formData);
+    }
+
     if (res.error) alert(res.error);
-    else { alert("Processo iniciado!"); setShowModal(false); window.location.reload(); }
+    else { 
+      alert(isEditing ? "Dados atualizados!" : "Processo iniciado!"); 
+      setShowModal(false); 
+      window.location.reload(); 
+    }
   };
+
+  const openNew = () => {
+    setFormData({ escola_id: '', nome_zelador: '', cpf_zelador: '', numero_sei: '', cargo_zelador: '', data_inicio: '', isento_pagamento: false });
+    setIsEditing(false);
+    setCurrentId('');
+    setShowModal(true);
+  }
+
+  const openEdit = (proc: any) => {
+    setFormData({
+      escola_id: proc.escola_id,
+      nome_zelador: proc.nome_zelador,
+      cpf_zelador: proc.cpf_zelador,
+      numero_sei: proc.numero_sei,
+      cargo_zelador: proc.cargo_zelador,
+      data_inicio: proc.data_inicio ? proc.data_inicio.split('T')[0] : '', // Formata para o input date
+      isento_pagamento: proc.isento_pagamento
+    });
+    setIsEditing(true);
+    setCurrentId(proc.id);
+    setShowModal(true);
+  }
 
   const avanvarEtapa = async (id: string, etapaAtual: number) => {
     if (etapaAtual >= 7) return;
@@ -80,33 +121,21 @@ export default function ZeladoriasPage() {
     window.location.reload();
   }
 
-  // --- FUNÇÃO PARA CALCULAR VALIDADE (2 ANOS APÓS ETAPA 6) ---
   const getValidadeInfo = (proc: any) => {
-    // Se ainda não passou pela etapa 6, não tem validade definida
     if (!proc.data_etapa_6) return null;
-
     const dataBase = new Date(proc.data_etapa_6);
     const validade = new Date(dataBase);
-    validade.setFullYear(dataBase.getFullYear() + 2); // Soma 2 anos
-
+    validade.setFullYear(dataBase.getFullYear() + 2);
     const hoje = new Date();
     const diasRestantes = Math.ceil((validade.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
-    
-    // Status visual
     let cor = "text-green-600 bg-green-50 border-green-200";
-    if (diasRestantes < 90) cor = "text-orange-600 bg-orange-50 border-orange-200"; // 3 meses
-    if (diasRestantes < 0) cor = "text-red-600 bg-red-50 border-red-200"; // Vencido
-
-    return {
-      dataFim: validade.toLocaleDateString('pt-BR'),
-      dias: diasRestantes,
-      classe: cor
-    };
+    if (diasRestantes < 90) cor = "text-orange-600 bg-orange-50 border-orange-200";
+    if (diasRestantes < 0) cor = "text-red-600 bg-red-50 border-red-200";
+    return { dataFim: validade.toLocaleDateString('pt-BR'), dias: diasRestantes, classe: cor };
   };
 
-  // Stepper Component (Mantido Simples)
   const RenderStepper = ({ processo }: { processo: any }) => {
-     // ... (Mesmo código do Stepper anterior) ...
+     // ... (Mesmo código do Stepper) ...
      return (
       <div className="relative flex flex-col md:flex-row justify-between items-start md:items-center w-full mt-6 px-2 gap-4 md:gap-0">
         <div className="absolute top-4 left-0 w-full h-1 bg-slate-100 -z-10 hidden md:block"></div>
@@ -145,7 +174,7 @@ export default function ZeladoriasPage() {
         <header className="flex justify-between mb-10">
           <h1 className="text-3xl font-black">Gestão de Zeladorias</h1>
           {isAdmin && (
-            <button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Processo</button>
+            <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Processo</button>
           )}
         </header>
 
@@ -161,7 +190,6 @@ export default function ZeladoriasPage() {
                     <div className="flex flex-wrap items-center gap-3 mb-2">
                       <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg text-xs font-bold uppercase">{proc.escolas?.nome}</span>
                       <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-purple-100"><Hash size={12}/> SEI: {proc.numero_sei || 'N/A'}</span>
-                      {/* Badge de Isenção */}
                       {proc.isento_pagamento ? (
                         <span className="bg-green-50 text-green-700 px-3 py-1 rounded-lg text-xs font-bold flex gap-1 border border-green-100"><Banknote size={12}/> Isento de Pagamento</span>
                       ) : (
@@ -169,22 +197,25 @@ export default function ZeladoriasPage() {
                       )}
                     </div>
 
-                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><FileText size={20} className="text-slate-400"/> {proc.nome_zelador}</h3>
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <FileText size={20} className="text-slate-400"/> {proc.nome_zelador}
+                        {/* Botão de Editar visível apenas para Admin */}
+                        {isAdmin && (
+                            <button onClick={() => openEdit(proc)} className="ml-2 p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar Dados">
+                                <Edit size={16}/>
+                            </button>
+                        )}
+                    </h3>
+
                     <div className="flex items-center gap-4 mt-1 ml-7 text-sm text-slate-500">
                       <p>CPF: {proc.cpf_zelador}</p>
                       <p className="flex items-center gap-1 text-slate-400 border-l pl-4"><Briefcase size={14}/> {proc.cargo_zelador}</p>
                     </div>
 
-                    {/* ALERTA DE VALIDADE */}
                     {validade && (
                         <div className={`mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${validade.classe}`}>
                             <CalendarClock size={16}/>
-                            <span className="text-sm font-bold">
-                                Validade: {validade.dataFim} 
-                                <span className="opacity-75 font-normal ml-1">
-                                    ({validade.dias > 0 ? `Vence em ${validade.dias} dias` : `Venceu há ${Math.abs(validade.dias)} dias`})
-                                </span>
-                            </span>
+                            <span className="text-sm font-bold">Validade: {validade.dataFim} <span className="opacity-75 font-normal ml-1">({validade.dias > 0 ? `Vence em ${validade.dias} dias` : `Venceu há ${Math.abs(validade.dias)} dias`})</span></span>
                         </div>
                     )}
                   </div>
@@ -206,13 +237,12 @@ export default function ZeladoriasPage() {
           })}
         </div>
 
-        {/* Modal Novo Processo - ATUALIZADO */}
+        {/* Modal Único (Criar/Editar) */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-lg animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
-              <h3 className="font-black text-xl mb-6">Iniciar Ocupação</h3>
-              <form onSubmit={handleCreate} className="space-y-4">
-                {/* Campos existentes... */}
+              <h3 className="font-black text-xl mb-6">{isEditing ? 'Editar Processo' : 'Iniciar Ocupação'}</h3>
+              <form onSubmit={handleSave} className="space-y-4">
                 <div className="md:col-span-2"><label className="text-xs font-bold text-slate-500 uppercase ml-1">Escola</label><select required value={formData.escola_id} onChange={e => setFormData({...formData, escola_id: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"><option value="">Selecione...</option>{escolas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}</select></div>
                 <div className="grid grid-cols-2 gap-4">
                     <div><label className="text-xs font-bold text-slate-500 uppercase ml-1">Protocolo SEI</label><input required value={formData.numero_sei} onChange={e => setFormData({...formData, numero_sei: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/></div>
@@ -223,22 +253,10 @@ export default function ZeladoriasPage() {
                     <div><label className="text-xs font-bold text-slate-500 uppercase ml-1">CPF</label><input required value={formData.cpf_zelador} onChange={e => setFormData({...formData, cpf_zelador: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/></div>
                     <div><label className="text-xs font-bold text-slate-500 uppercase ml-1">Cargo</label><input required value={formData.cargo_zelador} onChange={e => setFormData({...formData, cargo_zelador: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/></div>
                 </div>
-                
-                {/* NOVO CHECKBOX DE ISENÇÃO */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center gap-3">
-                    <input 
-                        type="checkbox" 
-                        id="isentoCheck"
-                        checked={formData.isento_pagamento} 
-                        onChange={e => setFormData({...formData, isento_pagamento: e.target.checked})}
-                        className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-                    />
-                    <label htmlFor="isentoCheck" className="cursor-pointer">
-                        <span className="block font-bold text-sm text-slate-700">Isento de Pagamento de Locação</span>
-                        <span className="text-xs text-slate-400">Marque apenas se o cargo permite isenção legal.</span>
-                    </label>
+                    <input type="checkbox" id="isentoCheck" checked={formData.isento_pagamento} onChange={e => setFormData({...formData, isento_pagamento: e.target.checked})} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"/>
+                    <label htmlFor="isentoCheck" className="cursor-pointer"><span className="block font-bold text-sm text-slate-700">Isento de Pagamento de Locação</span><span className="text-xs text-slate-400">Marque apenas se o cargo permite isenção legal.</span></label>
                 </div>
-
                 <div className="flex gap-3 pt-4"><button type="button" onClick={() => setShowModal(false)} className="flex-1 bg-slate-100 text-slate-500 font-bold p-3 rounded-xl">Cancelar</button><button type="submit" className="flex-1 bg-blue-600 text-white font-bold p-3 rounded-xl">Salvar</button></div>
               </form>
             </div>
