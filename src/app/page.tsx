@@ -1,8 +1,11 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// Adicionei o ícone 'Presentation'
-import { Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, Banknote, BarChart3, Presentation } from 'lucide-react';
+import { 
+  Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, 
+  Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, 
+  Banknote, BarChart3, Presentation, Bell 
+} from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
 import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
 import Link from 'next/link';
@@ -11,7 +14,7 @@ const NOMES_ETAPAS = [
   "1. Processo SEI",
   "2. Vistoria e Relatório",
   "3. Análise do SEFISC",
-  "4. Laudo do CECIG",
+  "4. Laudo CECIG",
   "5. Ciência do Valor",
   "6. Aut. Casa Civil",
   "7. Assinatura do Termo"
@@ -25,6 +28,7 @@ export default function Dashboard() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [zeladorias, setZeladorias] = useState<any[]>([]); 
   const [alertasVencimento, setAlertasVencimento] = useState<any[]>([]); 
+  const [notificacoesPendentes, setNotificacoesPendentes] = useState<any[]>([]); // NOVO: Notificações
   
   // Estatísticas
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
@@ -58,6 +62,19 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
+    // 1. CARREGAR NOTIFICAÇÕES (Se for escola)
+    if (!userProfile.is_admin && userProfile.escola_id) {
+        const { data: cobrancas } = await supabase
+            .from('fiscalizacoes_respostas')
+            .select('*, fiscalizacoes_eventos(data_referencia)')
+            .eq('escola_id', userProfile.escola_id)
+            .eq('notificado', true) // Admin mandou notificar
+            .eq('respondido', false); // Ainda não respondeu
+
+        if (cobrancas) setNotificacoesPendentes(cobrancas);
+    }
+
+    // 2. CARREGAR ZELADORIAS
     let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
     if (!userProfile.is_admin && userProfile.escola_id) {
         queryZel = queryZel.eq('escola_id', userProfile.escola_id);
@@ -98,6 +115,7 @@ export default function Dashboard() {
         setAlertasVencimento(alertas);
     }
 
+    // 3. CARREGAR USUÁRIOS
     let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
     if (!userProfile.is_admin && userProfile.escola_id) {
       queryUser = queryUser.eq('escola_id', userProfile.escola_id);
@@ -148,6 +166,10 @@ export default function Dashboard() {
         <nav className="flex-1 space-y-2">
           <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg"><LayoutDashboard size={20} /> <span>Painel</span></div>
           <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
+          
+          {/* MENU FISCALIZAÇÃO */}
+          <Link href="/fiscalizacoes" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><CheckCircle2 size={20} /> <span>Fiscalização</span></Link>
+
           {usuarioLogado?.is_admin && (
             <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>
           )}
@@ -156,12 +178,37 @@ export default function Dashboard() {
           <Link href="/apresentacao" className="flex items-center gap-3 p-3 text-yellow-400 hover:text-white hover:bg-yellow-600/20 rounded-xl transition-all border border-dashed border-yellow-600/30 mt-4">
             <Presentation size={20} /> <span>Apresentação</span>
           </Link>
-
         </nav>
         <button onClick={async () => { await supabase.auth.signOut(); window.location.href = '/login'; }} className="flex items-center gap-3 p-3 text-slate-400 hover:text-red-400 rounded-xl"><LogOut size={20} /> <span>Sair</span></button>
       </aside>
 
       <main className="flex-1 p-10 overflow-auto relative">
+        
+        {/* --- ALERTA DE COBRANÇA (VISÍVEL APENAS SE HOUVER PENDÊNCIA) --- */}
+        {notificacoesPendentes.length > 0 && (
+             <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
+                <div>
+                    <h3 className="text-red-700 font-black text-xl flex items-center gap-2">
+                        <Bell size={24} fill="currentColor"/> Atenção: Pendência de Fiscalização
+                    </h3>
+                    <p className="text-red-600 mt-2 font-medium">
+                        A Diretoria de Ensino solicita o preenchimento do questionário de limpeza referente à(s) data(s):
+                    </p>
+                    <ul className="mt-2 list-disc list-inside text-red-800 font-bold ml-2">
+                        {notificacoesPendentes.map(n => (
+                            <li key={n.id}>
+                                {new Date(n.fiscalizacoes_eventos.data_referencia).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+                {/* Botão fake para simular ação, ou pode direcionar para uma page de resposta */}
+                <button className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg transition-transform hover:scale-105">
+                    Responder Agora
+                </button>
+             </div>
+        )}
+
         <header className="flex justify-between items-center mb-10">
           <div>
             <h1 className="text-3xl font-black tracking-tight">Painel de Controle</h1>
@@ -232,7 +279,7 @@ export default function Dashboard() {
                         {NOMES_ETAPAS.map((nome, index) => {
                             const count = etapasCount[index];
                             const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
-                            const isConcluido = index === 6; // Etapa 7 é a última
+                            const isConcluido = index === 6;
                             
                             return (
                                 <div key={index} className="group">

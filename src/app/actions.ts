@@ -268,3 +268,86 @@ export async function arquivarZeladoria(id: string) {
     return { success: true };
   } catch (error: any) { return { error: error.message }; }
 }
+
+// ==========================================
+//           MÓDULO FISCALIZAÇÃO
+// ==========================================
+
+// 1. Criar Nova Data de Fiscalização
+export async function createFiscalizacaoEvent(dataReferencia: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+
+    // 1. Cria o Evento (A Data)
+    const { data: evento, error: errEvento } = await supabaseAdmin
+      .from('fiscalizacoes_eventos')
+      .insert({ data_referencia: dataReferencia })
+      .select()
+      .single();
+
+    if (errEvento) throw errEvento;
+
+    // 2. Pega todas as escolas cadastradas
+    const { data: escolas } = await supabaseAdmin.from('escolas').select('id');
+    
+    if (escolas && escolas.length > 0) {
+      // 3. Gera a lista de presença para todas as escolas
+      const inserts = escolas.map(escola => ({
+        evento_id: evento.id,
+        escola_id: escola.id,
+        respondido: false,
+        notificado: false
+      }));
+      
+      const { error: errInserts } = await supabaseAdmin.from('fiscalizacoes_respostas').insert(inserts);
+      if (errInserts) throw errInserts;
+    }
+
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+// 2. Marcar como Respondido (Check)
+export async function toggleFiscalizacaoRespondido(respostaId: string, statusAtual: boolean) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    // Se marcou como respondido, removemos a notificação automaticamente
+    const updateData = statusAtual ? { respondido: false } : { respondido: true, notificado: false };
+    
+    const { error } = await supabaseAdmin.from('fiscalizacoes_respostas').update(updateData).eq('id', respostaId);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+// 3. Enviar Notificação (Cobrança)
+export async function toggleFiscalizacaoNotificacao(respostaId: string, statusAtual: boolean) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('fiscalizacoes_respostas').update({ notificado: !statusAtual }).eq('id', respostaId);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
+
+// 4. Excluir Evento (Caso erre a data)
+export async function deleteFiscalizacaoEvent(id: string) {
+  const perm = await checkAdminPermission();
+  if (!perm.allowed) return { error: perm.error };
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { error } = await supabaseAdmin.from('fiscalizacoes_eventos').delete().eq('id', id);
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) { return { error: error.message }; }
+}
