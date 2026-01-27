@@ -455,23 +455,25 @@ export async function saveConsumoAgua(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
+    // 1. Busca leitura anterior mais recente
     const registroAnterior = await getUltimaLeitura(data.escola_id, data.data_leitura);
     
     let leituraAnterior = 0;
     let consumo = 0;
     let isPrimeiroDoMes = false;
 
-    // Comparação de Mês (YYYY-MM)
+    // Extrai "YYYY-MM" para comparar competência
     const mesAtual = data.data_leitura.substring(0, 7);
     const mesAnterior = registroAnterior?.data_leitura?.substring(0, 7);
 
-    // Se tem registro E é do mesmo mês -> Calcula
+    // LÓGICA DE NEGÓCIO:
     if (registroAnterior && mesAtual === mesAnterior) {
+        // Mesmo mês: Segue o fluxo normal (subtrai)
         leituraAnterior = Number(registroAnterior.leitura_atual);
         consumo = Number(data.leitura_atual) - leituraAnterior;
     } else {
-        // Mês novo ou 1º registro -> Zera consumo
-        leituraAnterior = Number(data.leitura_atual);
+        // Mês novo OU sem histórico: Zera o consumo (Início de ciclo)
+        leituraAnterior = Number(data.leitura_atual); // Define base igual atual
         consumo = 0;
         isPrimeiroDoMes = true;
     }
@@ -479,8 +481,9 @@ export async function saveConsumoAgua(data: any) {
     const limite = Number(data.populacao) * 0.008;
     const excedeu = !isPrimeiroDoMes && (consumo > limite);
 
+    // Validação: Hidrômetro não pode voltar (exceto na virada de mês/troca, mas aqui tratamos como erro simples)
     if (!isPrimeiroDoMes && consumo < 0) {
-        return { error: `Erro: Leitura atual (${data.leitura_atual}) menor que a anterior (${leituraAnterior}).` };
+        return { error: `Erro: A leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). Verifique os números.` };
     }
     
     if (excedeu) {
@@ -494,7 +497,7 @@ export async function saveConsumoAgua(data: any) {
         data_leitura: data.data_leitura,
         leitura_atual: data.leitura_atual,
         leitura_anterior: leituraAnterior,
-        consumo_dia: consumo,
+        consumo_dia: consumo, // Agora o banco aceitará este valor calculado aqui
         populacao: data.populacao,
         limite_calculado: limite,
         excedeu_limite: excedeu,
