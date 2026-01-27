@@ -531,10 +531,10 @@ export async function saveConsumoAgua(data: any) {
 }
 
 // 3. Buscar Histórico
-export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string) {
+export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
     const cookieStore = await cookies();
     
-    // 1. Cria cliente normal para verificar quem é o usuário
+    // 1. Cria cliente normal
     const supabaseAuth = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -542,46 +542,39 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
     );
     
     const { data: { user } } = await supabaseAuth.auth.getUser();
-    
-    // Por padrão, usa o cliente normal (respeita RLS para escolas)
     let supabaseClient = supabaseAuth;
 
     if (user) {
-        // Verifica se é Admin (Regional)
-        const { data: profile } = await supabaseAuth
-            .from('usuarios')
-            .select('perfil')
-            .eq('email', user.email)
-            .single();
-
+        const { data: profile } = await supabaseAuth.from('usuarios').select('perfil').eq('email', user.email).single();
+        // Se for Admin, usa Super Client para ver tudo
         if (profile?.perfil === 'Regional') {
-            // SE FOR ADMIN: Usa o cliente ADMIN (Service Role) para ver TUDO, sem barreiras
             supabaseClient = getSupabaseAdmin();
         }
     }
     
-    // 2. Monta a Query
     let query = supabaseClient
         .from('consumo_agua')
         .select('*, escolas(nome), usuarios(nome)')
         .order('data_leitura', { ascending: false });
 
-    // Se passou ID de escola, filtra. Se não (e for admin), traz tudo.
     if (escolaId) query = query.eq('escola_id', escolaId);
     
-    // Filtro de Data
+    // --- NOVO FILTRO: APENAS ALERTAS ---
+    if (apenasAlertas) {
+        query = query.eq('excedeu_limite', true);
+    }
+
     if (mes && ano) {
         const startDate = `${ano}-${mes.padStart(2, '0')}-01`;
         const nextMonth = Number(mes) === 12 ? 1 : Number(mes) + 1;
         const nextYear = Number(mes) === 12 ? Number(ano) + 1 : Number(ano);
         const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-        
         query = query.gte('data_leitura', startDate).lt('data_leitura', endDate);
     }
 
     const { data, error } = await query;
     if (error) {
-        console.error("Erro ao buscar histórico:", error);
+        console.error("Erro histórico:", error);
         return [];
     }
     return data;
