@@ -233,7 +233,7 @@ export default function InfograficoPage() {
                 {/* Card Zeladoria */}
                 <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all group">
                     <div className="w-14 h-14 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-600 mb-6 group-hover:scale-110 transition-transform">
-                        <Home size={28} /> // Usa icone Home que já existe no lucide
+                        <Home size={28} /> 
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 mb-3">Ocupação de Zeladoria</h3>
                     <p className="text-slate-600 leading-relaxed mb-4">
