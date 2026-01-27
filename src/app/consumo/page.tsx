@@ -34,7 +34,6 @@ export default function ConsumoAguaPage() {
 
   useEffect(() => { init(); }, []);
 
-  // Recalcular sempre que mudar os dados
   useEffect(() => {
     if (showModal && formData.escola_id && formData.data_leitura) {
         atualizarPreview();
@@ -66,53 +65,41 @@ export default function ConsumoAguaPage() {
   };
 
   const atualizarPreview = async () => {
-    // 1. Busca dados completos da leitura anterior (Valor e Data)
     const anteriorObj = await getUltimaLeitura(formData.escola_id, formData.data_leitura);
     setLeituraAnteriorDados(anteriorObj);
 
     const atual = Number(formData.leitura_atual) || 0;
     const pop = Number(formData.populacao) || 0;
     
-    // 2. LÓGICA CORRIGIDA: Comparação de String (YYYY-MM)
-    const mesAtual = formData.data_leitura.substring(0, 7); // "2026-01"
-    const mesAnterior = anteriorObj?.data_leitura?.substring(0, 7); // "2026-01"
+    // Comparação segura de Strings
+    const mesAtual = formData.data_leitura.substring(0, 7);
+    const mesAnterior = anteriorObj?.data_leitura?.substring(0, 7);
     
-    // É o primeiro mês se: Não tem anterior OU o mês é diferente
-    const isPrimeiroMes = !anteriorObj || mesAtual !== mesAnterior;
+    // CORREÇÃO: !!anteriorObj força booleano para evitar 'null'
+    const isMesmoMes = !!anteriorObj && (mesAtual === mesAnterior);
     
     let leituraAnteriorValor = 0;
     let consumo = 0;
 
-    if (isPrimeiroMes) {
-        // Primeiro registro do mês: Consumo é zero
-        consumo = 0;
-    } else {
-        // Mês igual: Subtrai do anterior
+    if (isMesmoMes) {
         leituraAnteriorValor = Number(anteriorObj.leitura_atual);
         consumo = atual - leituraAnteriorValor;
+    } else {
+        consumo = 0; 
     }
     
     const limite = pop * 0.008;
-    const excedeu = !isPrimeiroMes && (consumo > limite); 
+    const excedeu = isMesmoMes && (consumo > limite); 
 
-    setCalculoPreview({ consumo, limite, excedeu, isPrimeiroMes });
+    setCalculoPreview({ consumo, limite, excedeu, isPrimeiroMes: !isMesmoMes });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Validação extra no front (exceto se for primeiro do mês)
-    if (!calculoPreview.isPrimeiroMes && leituraAnteriorDados) {
-        if (Number(formData.leitura_atual) < Number(leituraAnteriorDados.leitura_atual)) {
-            alert("Erro: A leitura atual não pode ser menor que a anterior dentro do mesmo mês.");
-            return;
-        }
-    }
-    
     const res = await saveConsumoAgua(formData);
     if (res.error) alert(res.error);
     else {
-        alert("Registro salvo com sucesso!");
+        alert("Salvo com sucesso!");
         setShowModal(false);
         resetForm();
         loadRegistros(userProfile.is_admin ? filtroEscola : userProfile.escola_id);
@@ -148,9 +135,8 @@ export default function ConsumoAguaPage() {
 
   const handleExportPDF = () => {
     const doc = new jsPDF({ orientation: 'landscape' });
-    
     doc.setFillColor(37, 99, 235); doc.rect(0, 0, 297, 30, 'F');
-    doc.setTextColor(255, 255, 255); doc.setFontSize(16); doc.text("Relatório de Controle de Água", 14, 12);
+    doc.setTextColor(255, 255, 255); doc.setFontSize(16); doc.text("Relatório de Consumo de Água", 14, 12);
     doc.setFontSize(10); doc.text("Unidade Regional de Ensino Guarulhos Sul", 14, 18);
     doc.text(`Competência: ${filtroMes.toString().padStart(2, '0')}/${filtroAno}`, 14, 24);
 
@@ -159,8 +145,7 @@ export default function ConsumoAguaPage() {
         r.escolas.nome,
         r.leitura_anterior,
         r.leitura_atual,
-        // Mostra o consumo real ou aviso se for inicial
-        r.consumo_dia === 0 && r.leitura_anterior === r.leitura_atual ? '0 (Inicial)' : `${r.consumo_dia.toFixed(0)} m³`, 
+        r.consumo_dia === 0 ? '0 (Início)' : `${r.consumo_dia.toFixed(0)} m³`, 
         `${r.limite_calculado.toFixed(1)} m³`,
         r.populacao,
         r.excedeu_limite ? 'EXCEDEU' : 'NORMAL',
@@ -168,7 +153,7 @@ export default function ConsumoAguaPage() {
     ]);
 
     autoTable(doc, {
-        head: [['Data', 'Escola', 'Leitura Ant.', 'Leitura Atual', 'Consumo', 'Meta Diária', 'População', 'Status', 'Resp.']],
+        head: [['Data', 'Escola', 'Leitura Ant.', 'Leitura Atual', 'Consumo', 'Meta', 'População', 'Status', 'Resp.']],
         body: tableData,
         startY: 35,
         theme: 'grid',
@@ -177,10 +162,6 @@ export default function ConsumoAguaPage() {
                 if (data.column.index === 7 && data.cell.raw === 'EXCEDEU') {
                     data.cell.styles.textColor = [220, 38, 38];
                     data.cell.styles.fontStyle = 'bold';
-                }
-                if (data.column.index === 4 && data.cell.raw === '0 (Inicial)') {
-                     data.cell.styles.textColor = [37, 99, 235]; 
-                     data.cell.styles.fontStyle = 'bold';
                 }
             }
         }
@@ -201,17 +182,13 @@ export default function ConsumoAguaPage() {
 
       <main className="flex-1 p-10 overflow-auto">
         <header className="flex justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-black">Consumo de Água</h1>
-            <p className="text-slate-500">Controle diário de utilidade pública</p>
-          </div>
+          <h1 className="text-3xl font-black">Consumo de Água</h1>
           <div className="flex gap-2">
             <button onClick={handleExportPDF} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-3 rounded-xl font-bold flex gap-2 border border-slate-200"><FileDown size={20}/> PDF</button>
             <button onClick={() => { resetForm(); setShowModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Registro</button>
           </div>
         </header>
 
-        {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex gap-4 items-center flex-wrap">
             <div className="flex items-center gap-2 text-slate-500 font-bold text-sm"><Filter size={18} /> Filtros:</div>
             {userProfile?.is_admin && (
@@ -227,7 +204,6 @@ export default function ConsumoAguaPage() {
             <button onClick={() => loadRegistros(userProfile?.is_admin ? filtroEscola : userProfile?.escola_id)} className="bg-blue-100 text-blue-700 px-3 py-2 rounded-xl text-sm font-bold"><Search size={16}/></button>
         </div>
 
-        {/* Tabela */}
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
             <table className="w-full text-left">
                 <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-bold">
@@ -236,7 +212,7 @@ export default function ConsumoAguaPage() {
                         <th className="p-4">Escola</th>
                         <th className="p-4">Leituras (m³)</th>
                         <th className="p-4">Consumo</th>
-                        <th className="p-4">Meta Diária</th>
+                        <th className="p-4">Meta</th>
                         <th className="p-4">Status</th>
                         <th className="p-4 text-right">Ação</th>
                     </tr>
@@ -247,31 +223,17 @@ export default function ConsumoAguaPage() {
                         <tr key={reg.id} className="hover:bg-slate-50">
                             <td className="p-4 font-bold">{new Date(reg.data_leitura).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
                             <td className="p-4">{reg.escolas.nome}</td>
-                            <td className="p-4 text-xs text-slate-500">
-                                Ant: {reg.leitura_anterior} <br/>
-                                Atual: <strong>{reg.leitura_atual}</strong>
-                            </td>
-                            <td className="p-4 font-bold text-lg">
-                                {/* Se leitura_anterior == leitura_atual, é o marco zero */}
-                                {reg.leitura_anterior == reg.leitura_atual ? <span className="text-blue-500 text-xs">0 (Início)</span> : `${reg.consumo_dia.toFixed(0)} m³`}
-                            </td>
-                            <td className="p-4 text-slate-500">{reg.limite_calculado.toFixed(1)} m³ <br/> <span className="text-[10px]">({reg.populacao} pax)</span></td>
-                            <td className="p-4">
-                                {reg.excedeu_limite ? 
-                                    <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 w-fit"><AlertTriangle size={12}/> Excedeu</span> : 
-                                    <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 w-fit"><CheckCircle2 size={12}/> Normal</span>
-                                }
-                            </td>
-                            <td className="p-4 text-right">
-                                {userProfile?.is_admin && <button onClick={() => openEdit(reg)} className="text-blue-600 hover:bg-blue-50 p-2 rounded"><Edit size={16}/></button>}
-                            </td>
+                            <td className="p-4 text-xs text-slate-500">Ant: {reg.leitura_anterior} <br/> Atual: <strong>{reg.leitura_atual}</strong></td>
+                            <td className="p-4 font-bold text-lg">{reg.consumo_dia === 0 ? <span className="text-blue-500 text-xs">0 (Início)</span> : `${reg.consumo_dia.toFixed(0)} m³`}</td>
+                            <td className="p-4 text-slate-500">{reg.limite_calculado.toFixed(1)}</td>
+                            <td className="p-4">{reg.excedeu_limite ? <span className="text-red-600 font-bold flex items-center gap-1"><AlertTriangle size={14}/> Excedeu</span> : <span className="text-green-600 font-bold flex items-center gap-1"><CheckCircle2 size={14}/> OK</span>}</td>
+                            <td className="p-4 text-right">{userProfile?.is_admin && <button onClick={() => openEdit(reg)} className="text-blue-600 hover:bg-blue-50 p-2 rounded"><Edit size={16}/></button>}</td>
                         </tr>
                     ))}
                 </tbody>
             </table>
         </div>
 
-        {/* Modal Formulário */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
              <div className="bg-white rounded-3xl p-6 w-full max-w-lg animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
@@ -303,7 +265,6 @@ export default function ConsumoAguaPage() {
                     </div>
 
                     <div className="bg-slate-50 p-6 rounded-2xl border-2 border-slate-100">
-                        {/* Ilustração Visual do Hidrômetro */}
                         <div className="flex justify-between items-end mb-2">
                             <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
                                 <Droplets size={18} className="text-blue-500"/>
