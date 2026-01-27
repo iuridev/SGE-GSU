@@ -424,6 +424,7 @@ export async function deleteFiscal(id: string) {
 //           MÓDULO CONSUMO DE ÁGUA
 // ==========================================
 
+// 1. Buscar a leitura anterior COMPLETA (Valor + Data)
 export async function getUltimaLeitura(escolaId: string, dataReferencia: string) {
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -431,18 +432,20 @@ export async function getUltimaLeitura(escolaId: string, dataReferencia: string)
     { cookies: { get(name: string) { return undefined } } }
   );
   
+  // Busca o registro mais recente ANTES da data informada
   const { data } = await supabase
     .from('consumo_agua')
-    .select('leitura_atual, data_leitura')
+    .select('leitura_atual, data_leitura') // IMPORTANTE: Traz a data também
     .eq('escola_id', escolaId)
-    .lt('data_leitura', dataReferencia)
+    .lt('data_leitura', dataReferencia) // Estritamente menor que a data atual
     .order('data_leitura', { ascending: false })
     .limit(1)
     .single();
 
-  return data;
+  return data; // Retorna { leitura_atual: ..., data_leitura: ... } ou null
 }
 
+// 2. Criar ou Atualizar Registro de Consumo
 export async function saveConsumoAgua(data: any) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -455,42 +458,42 @@ export async function saveConsumoAgua(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
+    // 1. Busca leitura anterior
     const registroAnterior = await getUltimaLeitura(data.escola_id, data.data_leitura);
     
     let leituraAnterior = 0;
     let consumo = 0;
     let isPrimeiroDoMes = false;
 
-    // --- CORREÇÃO ROBUSTA DE DATAS ---
-    // Extrai apenas o ANO e MÊS (YYYY-MM) das strings de data para comparar
-    // Isso ignora dias e fusos horários, focando apenas na competência
-    const getCompetencia = (dateStr: string) => dateStr ? dateStr.substring(0, 7) : null;
+    // --- CORREÇÃO DE LÓGICA (STRING SAFE) ---
+    // Compara apenas a string "YYYY-MM" para ignorar dias e horas
+    const mesAtual = data.data_leitura.substring(0, 7); // Ex: "2026-01"
+    const mesAnterior = registroAnterior?.data_leitura?.substring(0, 7); // Ex: "2026-01"
 
-    const mesAtual = getCompetencia(data.data_leitura);
-    const mesAnterior = registroAnterior ? getCompetencia(registroAnterior.data_leitura) : null;
-
-    // Se existe registro anterior E o mês/ano são idênticos -> Calcula a diferença
+    // Regra: Se tem registro anterior E é do MESMO MÊS -> Calcula Diferença
     if (registroAnterior && mesAtual === mesAnterior) {
         leituraAnterior = Number(registroAnterior.leitura_atual);
         consumo = Number(data.leitura_atual) - leituraAnterior;
     } else {
-        // Se mudou o mês OU não tem registro -> Zera o consumo (Início de Ciclo)
-        leituraAnterior = Number(data.leitura_atual); // Define anterior igual atual para zerar a conta
+        // Regra: Se mudou o mês OU não tem anterior -> É o PRIMEIRO (Consumo 0)
+        // Para zerar a conta (Atual - Anterior = 0), definimos Anterior = Atual
+        leituraAnterior = Number(data.leitura_atual);
         consumo = 0;
         isPrimeiroDoMes = true;
     }
 
     const limite = Number(data.populacao) * 0.008;
-    const excedeu = !isPrimeiroDoMes && (consumo > limite); // Só valida estouro se não for leitura inicial
+    // Só valida excesso se NÃO for o primeiro dia (pois primeiro dia é 0 e nunca excede)
+    const excedeu = !isPrimeiroDoMes && (consumo > limite); 
 
     // Validações
     if (!isPrimeiroDoMes && consumo < 0) {
-        return { error: `Erro: Leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). Verifique o hidrômetro.` };
+        return { error: `Erro: A leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). O hidrômetro não pode diminuir no mesmo mês.` };
     }
     
     if (excedeu) {
-        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória.' };
-        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória.' };
+        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória (consumo acima da média).' };
+        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória (consumo acima da média).' };
     }
 
     const payload = {
@@ -498,7 +501,8 @@ export async function saveConsumoAgua(data: any) {
         registrado_por: user.id,
         data_leitura: data.data_leitura,
         leitura_atual: data.leitura_atual,
-        leitura_anterior: leituraAnterior,
+        leitura_anterior: leituraAnterior, // Salva o valor ajustado
+        consumo_dia: consumo, // Força o valor calculado aqui (caso o banco não calcule)
         populacao: data.populacao,
         limite_calculado: limite,
         excedeu_limite: excedeu,
@@ -512,7 +516,7 @@ export async function saveConsumoAgua(data: any) {
     } else {
         const { error } = await supabase.from('consumo_agua').insert(payload);
         if (error) {
-             if (error.code === '23505') return { error: 'Já existe um registro para esta data.' };
+             if (error.code === '23505') return { error: 'Já existe um registro para esta data nesta escola.' };
              throw error;
         }
     }
@@ -542,7 +546,6 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
         const nextMonth = Number(mes) === 12 ? 1 : Number(mes) + 1;
         const nextYear = Number(mes) === 12 ? Number(ano) + 1 : Number(ano);
         const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-        
         query = query.gte('data_leitura', startDate).lt('data_leitura', endDate);
     }
 
