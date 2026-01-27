@@ -424,25 +424,32 @@ export async function deleteFiscal(id: string) {
 //           MÓDULO CONSUMO DE ÁGUA
 // ==========================================
 
+// 1. Buscar a leitura anterior MAIS PRÓXIMA (Valor + Data)
 export async function getUltimaLeitura(escolaId: string, dataReferencia: string) {
+  // CORREÇÃO: Agora usamos cookies() para autenticar a requisição
+  const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return undefined } } }
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
   );
   
-  const { data } = await supabase
+  // Busca o registro mais recente ANTES da data informada
+  const { data, error } = await supabase
     .from('consumo_agua')
     .select('leitura_atual, data_leitura')
     .eq('escola_id', escolaId)
-    .lt('data_leitura', dataReferencia)
-    .order('data_leitura', { ascending: false })
+    .lt('data_leitura', dataReferencia) // < Data Atual
+    .order('data_leitura', { ascending: false }) // Do mais recente para o antigo
     .limit(1)
-    .maybeSingle(); // CORREÇÃO: maybeSingle evita erro no log se não achar nada
+    .maybeSingle(); // Retorna null se não achar, sem erro
 
-  return data;
+  if (error) console.error("Erro ao buscar leitura anterior:", error);
+  
+  return data; // Retorna { leitura_atual: ..., data_leitura: ... } ou null
 }
 
+// 2. Criar ou Atualizar Registro de Consumo
 export async function saveConsumoAgua(data: any) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -455,40 +462,41 @@ export async function saveConsumoAgua(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Busca leitura anterior mais recente
+    // 1. Busca leitura anterior
     const registroAnterior = await getUltimaLeitura(data.escola_id, data.data_leitura);
     
     let leituraAnterior = 0;
     let consumo = 0;
     let isPrimeiroDoMes = false;
 
-    // Extrai "YYYY-MM" para comparar competência
+    // --- LÓGICA DE CÁLCULO (STRING SAFE) ---
+    // Compara apenas "YYYY-MM" para saber se é a mesma competência
     const mesAtual = data.data_leitura.substring(0, 7);
     const mesAnterior = registroAnterior?.data_leitura?.substring(0, 7);
 
-    // LÓGICA DE NEGÓCIO:
     if (registroAnterior && mesAtual === mesAnterior) {
-        // Mesmo mês: Segue o fluxo normal (subtrai)
+        // Cenário 1: Mesmo mês -> Calcula Diferença
         leituraAnterior = Number(registroAnterior.leitura_atual);
         consumo = Number(data.leitura_atual) - leituraAnterior;
+        
+        // Validação: Leitura atual não pode ser menor que anterior no mesmo mês
+        if (consumo < 0) {
+             return { error: `Erro: Leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). Verifique se digitou corretamente.` };
+        }
     } else {
-        // Mês novo OU sem histórico: Zera o consumo (Início de ciclo)
+        // Cenário 2: Mês novo OU 1º registro -> Zera consumo (Início de Ciclo)
         leituraAnterior = Number(data.leitura_atual); // Define base igual atual
         consumo = 0;
         isPrimeiroDoMes = true;
     }
 
     const limite = Number(data.populacao) * 0.008;
+    // Só valida excesso se não for leitura inicial (consumo > 0)
     const excedeu = !isPrimeiroDoMes && (consumo > limite);
 
-    // Validação: Hidrômetro não pode voltar (exceto na virada de mês/troca, mas aqui tratamos como erro simples)
-    if (!isPrimeiroDoMes && consumo < 0) {
-        return { error: `Erro: A leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). Verifique os números.` };
-    }
-    
     if (excedeu) {
-        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória.' };
-        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória.' };
+        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória (consumo acima da média).' };
+        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória (consumo acima da média).' };
     }
 
     const payload = {
@@ -497,7 +505,7 @@ export async function saveConsumoAgua(data: any) {
         data_leitura: data.data_leitura,
         leitura_atual: data.leitura_atual,
         leitura_anterior: leituraAnterior,
-        consumo_dia: consumo, // Agora o banco aceitará este valor calculado aqui
+        consumo_dia: consumo, // Força o valor calculado aqui
         populacao: data.populacao,
         limite_calculado: limite,
         excedeu_limite: excedeu,
@@ -505,6 +513,7 @@ export async function saveConsumoAgua(data: any) {
         acao_corretiva: excedeu ? data.acao_corretiva : null
     };
 
+    // Upsert
     if (data.id) {
         const { error } = await supabase.from('consumo_agua').update(payload).eq('id', data.id);
         if (error) throw error;
@@ -521,6 +530,7 @@ export async function saveConsumoAgua(data: any) {
   } catch (error: any) { return { error: error.message }; }
 }
 
+// 3. Buscar Histórico
 export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string) {
     const cookieStore = await cookies();
     const supabase = createServerClient(
