@@ -39,8 +39,8 @@ export default function Dashboard() {
   // Novos Indicadores e Gráficos
   const [waterAvg, setWaterAvg] = useState(0);
   const [inspectionRate, setInspectionRate] = useState(0);
-  const [justificativasMes, setJustificativasMes] = useState(0); // NOVO
-  const [rankingPendencias, setRankingPendencias] = useState<any[]>([]); // NOVO
+  const [justificativasMes, setJustificativasMes] = useState(0); 
+  const [rankingPendencias, setRankingPendencias] = useState<any[]>([]);
 
   // Dados Auxiliares
   const [escolas, setEscolas] = useState<any[]>([]);
@@ -70,7 +70,7 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
-    // --- 1. NOTIFICAÇÕES (Pendências do Usuário Logado) ---
+    // --- 1. NOTIFICAÇÕES ---
     if (!userProfile.is_admin && userProfile.escola_id) {
         const { data: cobrancas } = await supabase
             .from('fiscalizacoes_respostas')
@@ -82,7 +82,7 @@ export default function Dashboard() {
         if (cobrancas) setNotificacoesPendentes(cobrancas);
     }
 
-    // --- 2. ZELADORIAS (KPIs Principais) ---
+    // --- 2. ZELADORIAS ---
     let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
     if (!userProfile.is_admin && userProfile.escola_id) {
         queryZel = queryZel.eq('escola_id', userProfile.escola_id);
@@ -119,27 +119,20 @@ export default function Dashboard() {
         setAlertasVencimento(alertas);
     }
 
-    // --- 3. ÁGUA (Média Diária e Justificativas) ---
+    // --- 3. ÁGUA ---
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
 
-    // Query Base de Água
     let queryWater = supabase.from('consumo_agua').select('consumo_dia, excedeu_limite').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
-    
-    // CORREÇÃO PEDIDA: Se for admin, NÃO filtra por escola, pega geral.
     if (!userProfile.is_admin && userProfile.escola_id) {
         queryWater = queryWater.eq('escola_id', userProfile.escola_id);
     }
     
     const { data: waterData } = await queryWater;
-    
     if (waterData && waterData.length > 0) {
-        // Cálculo da Média
         const totalConsumo = waterData.reduce((acc, curr) => acc + (Number(curr.consumo_dia) || 0), 0);
         setWaterAvg(totalConsumo / waterData.length);
-
-        // Contagem de Justificativas (Excedeu Limite)
         const totalJustificativas = waterData.filter(r => r.excedeu_limite).length;
         setJustificativasMes(totalJustificativas);
     } else {
@@ -147,32 +140,30 @@ export default function Dashboard() {
         setJustificativasMes(0);
     }
 
-    // --- 4. FISCALIZAÇÃO (Taxa e Ranking) ---
-    // Buscar todas as pendências para calcular ranking e taxa
+    // --- 4. FISCALIZAÇÃO (Correção do Erro de Tipo) ---
     let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido, escola_id, escolas(nome)');
     if (!userProfile.is_admin && userProfile.escola_id) queryInsp = queryInsp.eq('escola_id', userProfile.escola_id);
 
     const { data: inspData } = await queryInsp;
     
     if (inspData && inspData.length > 0) {
-        // Taxa Geral
         const respondidos = inspData.filter(i => i.respondido).length;
         setInspectionRate(Math.round((respondidos / inspData.length) * 100));
 
-        // Ranking de Quem NÃO Respondeu (Apenas para Admin faz mais sentido, mas operaciona vê o seu)
         const pendentes = inspData.filter(i => !i.respondido);
         const rankingMap: Record<string, number> = {};
         
         pendentes.forEach(p => {
-            const nomeEscola = p.escolas?.nome || 'Desconhecida';
+            // CORREÇÃO: Tratamento robusto para 'escolas' que pode vir como array ou objeto
+            const escola: any = p.escolas;
+            const nomeEscola = (Array.isArray(escola) ? escola[0]?.nome : escola?.nome) || 'Desconhecida';
             rankingMap[nomeEscola] = (rankingMap[nomeEscola] || 0) + 1;
         });
 
-        // Transforma em array e ordena
         const rankingArray = Object.entries(rankingMap)
             .map(([nome, qtd]) => ({ nome, qtd }))
             .sort((a, b) => b.qtd - a.qtd)
-            .slice(0, 5); // Top 5
+            .slice(0, 5); 
 
         setRankingPendencias(rankingArray);
     } else {
@@ -206,7 +197,6 @@ export default function Dashboard() {
     doc.setTextColor(0, 0, 0);
     let y = 55;
 
-    // Seção 1: Indicadores
     doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("1. KPIs Gerais", 14, y);
     y += 10;
     doc.setFontSize(11); doc.setFont("helvetica", "normal");
@@ -221,9 +211,8 @@ export default function Dashboard() {
 
     y += 10;
     
-    // Seção 2: Ranking Pendências
     if (rankingPendencias.length > 0) {
-        doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("2. Escolas com Mais Pendências (Fiscalização)", 14, y);
+        doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("2. Ranking de Pendências (Top 5)", 14, y);
         y += 10;
         doc.setFontSize(11); doc.setFont("helvetica", "normal");
         rankingPendencias.forEach((r, i) => {
@@ -235,7 +224,6 @@ export default function Dashboard() {
     doc.save(`dashboard_${date.replace(/\//g, '-')}.pdf`);
   };
 
-  // ... (Funções de Usuário: handleSave, handleDelete mantidas iguais) ...
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoadingAction(true);
@@ -274,8 +262,6 @@ export default function Dashboard() {
       </aside>
 
       <main className="flex-1 p-10 overflow-auto relative">
-        
-        {/* HEADER */}
         <header className="flex justify-between items-center mb-10">
           <div>
             <h1 className="text-3xl font-black tracking-tight">Painel de Controle</h1>
@@ -286,7 +272,6 @@ export default function Dashboard() {
           </button>
         </header>
 
-        {/* --- ALERTAS DE PENDÊNCIA (Só aparece se tiver) --- */}
         {notificacoesPendentes.length > 0 && (
              <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
                 <div>
@@ -297,21 +282,16 @@ export default function Dashboard() {
              </div>
         )}
 
-        {/* --- 1. CARDS DE INDICADORES (LINHA SUPERIOR) --- */}
+        {/* INDICADORES */}
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-            {/* Card Zeladoria */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
                 <div className="flex justify-between items-start mb-4">
                     <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div>
                     <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Zeladorias</span>
                 </div>
-                <div>
-                    <span className="text-4xl font-black text-slate-800">{stats.total}</span>
-                    <p className="text-slate-400 text-xs mt-1">Processos cadastrados</p>
-                </div>
+                <div><span className="text-4xl font-black text-slate-800">{stats.total}</span><p className="text-slate-400 text-xs mt-1">Processos cadastrados</p></div>
             </div>
 
-            {/* Card Média Água */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
                 <div className="flex justify-between items-start mb-4">
                     <div className="p-3 bg-cyan-50 text-cyan-600 rounded-xl"><Droplets size={24} /></div>
@@ -324,40 +304,27 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* Card Justificativas (NOVO) */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
                 <div className="flex justify-between items-start mb-4">
                     <div className="p-3 bg-red-50 text-red-600 rounded-xl"><FileWarning size={24} /></div>
                     <span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Alertas Água</span>
                 </div>
-                <div>
-                    <span className="text-4xl font-black text-slate-800">{justificativasMes}</span>
-                    <p className="text-slate-400 text-xs mt-1">Justificativas este mês</p>
-                </div>
+                <div><span className="text-4xl font-black text-slate-800">{justificativasMes}</span><p className="text-slate-400 text-xs mt-1">Justificativas este mês</p></div>
             </div>
 
-            {/* Card Fiscalização */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
                 <div className="flex justify-between items-start mb-4">
                     <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><ClipboardList size={24} /></div>
                     <span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Respostas</span>
                 </div>
-                <div>
-                    <span className="text-4xl font-black text-slate-800">{inspectionRate}%</span>
-                    <p className="text-slate-400 text-xs mt-1">Taxa de conformidade</p>
-                </div>
+                <div><span className="text-4xl font-black text-slate-800">{inspectionRate}%</span><p className="text-slate-400 text-xs mt-1">Taxa de conformidade</p></div>
             </div>
         </section>
 
-        {/* --- 2. GRÁFICOS E RANKINGS (LINHA DO MEIO) --- */}
+        {/* GRÁFICOS */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
-            
-            {/* Gráfico Funil (Zeladoria) */}
             <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex items-center gap-2 mb-6">
-                    <BarChart3 className="text-blue-600" />
-                    <h3 className="text-lg font-bold text-slate-800">Status dos Processos (Funil)</h3>
-                </div>
+                <div className="flex items-center gap-2 mb-6"><BarChart3 className="text-blue-600" /><h3 className="text-lg font-bold text-slate-800">Status dos Processos (Funil)</h3></div>
                 <div className="space-y-4">
                     {NOMES_ETAPAS.map((nome, index) => {
                         const count = etapasCount[index];
@@ -378,13 +345,8 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* Ranking de Pendências (NOVO GRÁFICO) */}
             <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex items-center gap-2 mb-6">
-                    <ListX className="text-red-500" />
-                    <h3 className="text-lg font-bold text-slate-800">Ranking de Pendências</h3>
-                </div>
-                
+                <div className="flex items-center gap-2 mb-6"><ListX className="text-red-500" /><h3 className="text-lg font-bold text-slate-800">Ranking de Pendências</h3></div>
                 {rankingPendencias.length > 0 ? (
                     <div className="space-y-5">
                         {rankingPendencias.map((item, idx) => (
@@ -412,7 +374,7 @@ export default function Dashboard() {
             </div>
         </section>
 
-        {/* --- 3. ALERTAS DE VENCIMENTO --- */}
+        {/* ALERTAS VENCIMENTO */}
         <section className="mb-10">
              {alertasVencimento.length > 0 ? (
                 <div className="bg-red-50/50 p-6 rounded-3xl border border-red-100">
@@ -434,7 +396,7 @@ export default function Dashboard() {
             ) : null}
         </section>
 
-        {/* --- 4. LISTA DE USUÁRIOS --- */}
+        {/* USUÁRIOS */}
         <section className="border-t border-slate-200 pt-10">
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-3"><div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Users size={20} /></div><h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2></div>
@@ -465,7 +427,6 @@ export default function Dashboard() {
             </div>
         </section>
 
-        {/* MODAL USUÁRIOS */}
         {modalType && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md animate-in zoom-in duration-200">
