@@ -1,9 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, ArrowLeft, Loader2, AlertTriangle, FileDown, Search, Filter, Droplets, Calendar, User } from 'lucide-react';
+import { 
+  ShieldCheck, ArrowLeft, Loader2, AlertTriangle, FileDown, Search, Filter, 
+  Droplets, Calendar, User, Home // Adicionado Home
+} from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { getConsumoHistorico } from '../../actions'; // Importe do caminho correto
+import { getConsumoHistorico } from '../../actions'; 
 import Link from 'next/link';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -14,7 +17,6 @@ export default function AlertasConsumoPage() {
   const [escolas, setEscolas] = useState<any[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   
-  // Filtros
   const [filtroEscola, setFiltroEscola] = useState('');
   const [filtroMes, setFiltroMes] = useState(new Date().getMonth() + 1);
   const [filtroAno, setFiltroAno] = useState(new Date().getFullYear());
@@ -35,21 +37,18 @@ export default function AlertasConsumoPage() {
         if (esc) setEscolas(esc);
     }
 
-    // Carrega dados iniciais (Passando TRUE para o parametro apenasAlertas)
     await loadAlertas(admin ? '' : profile?.escola_id);
     setLoading(false);
   };
 
   const loadAlertas = async (escolaId?: string) => {
-    // O 4º parametro 'true' ativa o filtro de excedeu_limite no backend
     const dados = await getConsumoHistorico(escolaId, filtroMes.toString(), filtroAno.toString(), true);
     setAlertas(dados || []);
   };
 
   const handleExportPDF = () => {
     const doc = new jsPDF({ orientation: 'landscape' });
-    
-    doc.setFillColor(220, 38, 38); // Vermelho Alerta
+    doc.setFillColor(220, 38, 38); 
     doc.rect(0, 0, 297, 30, 'F');
     doc.setTextColor(255, 255, 255); 
     doc.setFontSize(16); doc.setFont("helvetica", "bold");
@@ -70,13 +69,13 @@ export default function AlertasConsumoPage() {
         body: tableData,
         startY: 35,
         theme: 'grid',
-        headStyles: { fillColor: [185, 28, 28] }, // Cabeçalho vermelho escuro
+        headStyles: { fillColor: [185, 28, 28] },
         styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
         columnStyles: {
             0: { cellWidth: 25 },
             1: { cellWidth: 40 },
             2: { cellWidth: 30 },
-            3: { cellWidth: 90 }, // Mais espaço para texto
+            3: { cellWidth: 90 },
             4: { cellWidth: 90 }
         }
     });
@@ -90,6 +89,7 @@ export default function AlertasConsumoPage() {
     <div className="flex h-screen bg-red-50/30 font-sans text-slate-900">
       <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
         <div className="flex items-center gap-2 mb-10 pb-4 border-b border-slate-700"><ShieldCheck className="text-blue-400" /><span className="text-xl font-bold">SGE-GSU</span></div>
+        <Link href="/" className="flex items-center gap-3 p-3 text-slate-400 hover:bg-slate-800 rounded-xl mb-2"><Home size={20} /> Dashboard</Link>
         <Link href="/consumo" className="flex items-center gap-3 p-3 text-slate-400 hover:bg-slate-800 rounded-xl mb-2"><ArrowLeft size={20} /> Voltar</Link>
         <div className="flex items-center gap-3 p-3 bg-red-600 rounded-xl font-medium"><AlertTriangle size={20} /> Justificativas</div>
       </aside>
@@ -121,7 +121,6 @@ export default function AlertasConsumoPage() {
             <button onClick={() => loadAlertas(isAdmin ? filtroEscola : undefined)} className="bg-red-100 text-red-700 px-3 py-2 rounded-xl text-sm font-bold"><Search size={16}/></button>
         </div>
 
-        {/* Lista de Cards de Justificativa (Melhor que tabela para texto longo) */}
         <div className="space-y-4">
             {alertas.length === 0 && <div className="text-center py-20 text-slate-400">Nenhuma ocorrência de excesso neste período.</div>}
             
