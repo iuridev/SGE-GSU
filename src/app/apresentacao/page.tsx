@@ -1,23 +1,169 @@
 "use client";
 
-
 import React from 'react';
 import { 
-  ShieldCheck, Home, FileDown, Search, FileText, Bell, Users, Lock, Download, BarChart3, 
+  ShieldCheck, Home, FileText, Bell, Users, Lock, Download, BarChart3, 
   CheckCircle2, Server, Globe, Droplets, ClipboardList, Zap, LayoutDashboard, 
-  School, FileCheck
+  School, FileCheck, FileDown 
 } from 'lucide-react';
 import Link from 'next/link';
+import jsPDF from 'jspdf';
 
 export default function InfograficoPage() {
+
+  // --- FUNÇÃO DE GERAÇÃO DO PDF ---
+  const handleExportPDF = () => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    
+    // Configurações de estilo
+    const blueColor = '#1e3a8a'; // slate-900 like
+    const lightBlue = '#2563eb'; // blue-600 like
+    
+    let y = 20; // Cursor vertical
+
+    // 1. CAPA / CABEÇALHO
+    doc.setFillColor(30, 58, 138); // Fundo Azul Escuro
+    doc.rect(0, 0, pageWidth, 50, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    doc.text("SGE-GSU", 20, 25);
+    
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.text("Sistema de Gestão Escolar e Zeladorias", 20, 32);
+    doc.text("Unidade Regional de Ensino Guarulhos Sul", 20, 38);
+
+    y = 65;
+
+    // 2. SEÇÃO OPERACIONAL (ESCOLAS)
+    doc.setTextColor(30, 58, 138);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("1. Perfil Operacional (Para a Escola)", 20, y);
+    y += 10;
+
+    doc.setTextColor(50, 50, 50);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    
+    const itemsOperacional = [
+        { title: "Controle de Água Inteligente", desc: "Cálculo automático de consumo e meta diária por aluno. Alerta de excessos." },
+        { title: "Fiscalização Semanal", desc: "Check-in rápido da limpeza terceirizada com histórico digital." },
+        { title: "Gestão de Zeladoria", desc: "Visualização transparente do fluxo de ocupação e prazos." }
+    ];
+
+    itemsOperacional.forEach(item => {
+        doc.setFont("helvetica", "bold");
+        doc.text(`• ${item.title}`, 20, y);
+        y += 6;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100, 100, 100);
+        // Quebra de linha manual simples para descrição
+        const splitDesc = doc.splitTextToSize(item.desc, 170);
+        doc.text(splitDesc, 26, y);
+        y += (splitDesc.length * 6) + 4;
+        doc.setTextColor(50, 50, 50);
+    });
+
+    y += 10;
+
+    // 3. SEÇÃO ADMINISTRATIVA (DIRETORIA)
+    doc.setTextColor(30, 58, 138);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("2. Perfil Administrativo (Para a Diretoria)", 20, y);
+    y += 10;
+
+    const itemsAdmin = [
+        { title: "Painel de Decisão (Dashboard)", desc: "KPIs globais, médias de consumo e totais de processos em tempo real." },
+        { title: "Gestão de Alertas", desc: "Central de justificativas de água e ações corretivas das escolas." },
+        { title: "Relatórios Oficiais", desc: "PDFs padronizados com cabeçalho institucional prontos para impressão." },
+        { title: "Controle de Acesso", desc: "Gerenciamento hierárquico de usuários, escolas e fiscais." }
+    ];
+
+    doc.setTextColor(50, 50, 50);
+    doc.setFontSize(11);
+
+    itemsAdmin.forEach(item => {
+        // Verifica quebra de página
+        if (y > 270) { doc.addPage(); y = 20; }
+
+        doc.setFont("helvetica", "bold");
+        doc.text(`• ${item.title}`, 20, y);
+        y += 6;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100, 100, 100);
+        const splitDesc = doc.splitTextToSize(item.desc, 170);
+        doc.text(splitDesc, 26, y);
+        y += (splitDesc.length * 6) + 4;
+        doc.setTextColor(50, 50, 50);
+    });
+
+    y += 10;
+    if (y > 250) { doc.addPage(); y = 20; }
+
+    // 4. FLUXO DE TRABALHO
+    doc.setTextColor(30, 58, 138);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("3. Fluxo Padronizado de Zeladoria", 20, y);
+    y += 10;
+
+    const etapas = [
+        "1. Processo SEI", "2. Vistoria/Fotos", "3. Análise SEFISC", 
+        "4. Laudo CECIG", "5. Ciência do Valor", "6. Aut. Casa Civil", "7. Assinatura Termo"
+    ];
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(50, 50, 50);
+    
+    // Desenha as etapas em caixas simples
+    let xStep = 20;
+    etapas.forEach((etapa, i) => {
+        // Verifica largura
+        if (xStep > 150) { xStep = 20; y += 15; }
+        
+        doc.setDrawColor(200, 200, 200);
+        doc.roundedRect(xStep, y, 40, 10, 2, 2);
+        doc.text(etapa, xStep + 2, y + 6);
+        xStep += 45;
+    });
+
+    // Rodapé
+    const date = new Date().toLocaleDateString('pt-BR');
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(`Documento gerado em ${date} via SGE-GSU`, 20, pageHeight - 10);
+
+    doc.save('apresentacao_sistema_sge.pdf');
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 relative">
       
+      {/* BOTÃO FLUTUANTE DE PDF (FIXO NO CANTO) */}
+      <button 
+        onClick={handleExportPDF}
+        className="fixed bottom-8 right-8 z-50 bg-red-600 hover:bg-red-700 text-white p-4 rounded-full shadow-2xl flex items-center gap-2 transition-transform hover:scale-110 group"
+        title="Baixar Apresentação em PDF"
+      >
+        <FileDown size={24} />
+        <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-500 font-bold whitespace-nowrap">
+            Baixar PDF
+        </span>
+      </button>
+
       {/* HERO SECTION */}
       <header className="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 text-white p-20 text-center rounded-b-[4rem] shadow-2xl mb-16 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
         
         <div className="relative z-10 flex flex-col items-center">
+            {/* ... Conteúdo do Header ... */}
             <div className="bg-white/10 p-5 rounded-3xl backdrop-blur-md mb-6 border border-white/10 shadow-xl">
                 <ShieldCheck size={72} className="text-blue-400" />
             </div>
@@ -27,9 +173,12 @@ export default function InfograficoPage() {
             <p className="text-2xl font-medium text-blue-100 max-w-3xl mx-auto leading-relaxed">
               O Ecossistema Digital da <span className="font-bold text-white">Unidade Regional de Ensino Guarulhos Sul</span>
             </p>
-            <div className="mt-8 flex gap-4">
-                <span className="bg-blue-600/30 border border-blue-400/30 px-6 py-2 rounded-full text-sm font-bold uppercase tracking-widest text-blue-200">Gestão Integrada</span>
-                <span className="bg-green-600/30 border border-green-400/30 px-6 py-2 rounded-full text-sm font-bold uppercase tracking-widest text-green-200">Compliance</span>
+            
+            {/* Botão de PDF também no Header para visibilidade */}
+            <div className="mt-8 flex gap-4 justify-center">
+                <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 border border-white/30 text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 transition-all">
+                    <FileDown size={20}/> Baixar Apresentação
+                </button>
             </div>
         </div>
       </header>
@@ -84,7 +233,7 @@ export default function InfograficoPage() {
                 {/* Card Zeladoria */}
                 <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all group">
                     <div className="w-14 h-14 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-600 mb-6 group-hover:scale-110 transition-transform">
-                        <Home size={28} />
+                        <Home size={28} /> // Usa icone Home que já existe no lucide
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 mb-3">Ocupação de Zeladoria</h3>
                     <p className="text-slate-600 leading-relaxed mb-4">
@@ -155,7 +304,7 @@ export default function InfograficoPage() {
                     {[
                         {n:1, t:"Processo SEI", i: <FileText size={18}/>}, 
                         {n:2, t:"Vistoria", i: <CheckCircle2 size={18}/>}, 
-                        {n:3, t:"Análise SEFISC", i: <Search size={18}/>},
+                        {n:3, t:"Análise SEFISC", i: <Server size={18}/>}, // Substitui Search por Server
                         {n:4, t:"Laudo CECIG", i: <FileCheck size={18}/>}, 
                         {n:5, t:"Ciência Valor", i: <DollarSignIcon size={18}/>}, 
                         {n:6, t:"Casa Civil", i: <School size={18}/>}, 
