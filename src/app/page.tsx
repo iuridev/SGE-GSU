@@ -3,8 +3,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, 
-  Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, 
-  Banknote, BarChart3, Presentation, Bell, Droplets, ClipboardList, FileDown 
+  Home, LayoutDashboard, CheckCircle2, AlertTriangle, Clock, 
+  Banknote, BarChart3, Presentation, Bell, Droplets, ClipboardList, FileDown, 
+  FileWarning, ListX 
 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
 import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
@@ -35,9 +36,11 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
   const [etapasCount, setEtapasCount] = useState<number[]>(new Array(7).fill(0));
   
-  // Novos Indicadores
+  // Novos Indicadores e Gráficos
   const [waterAvg, setWaterAvg] = useState(0);
   const [inspectionRate, setInspectionRate] = useState(0);
+  const [justificativasMes, setJustificativasMes] = useState(0); // NOVO
+  const [rankingPendencias, setRankingPendencias] = useState<any[]>([]); // NOVO
 
   // Dados Auxiliares
   const [escolas, setEscolas] = useState<any[]>([]);
@@ -67,7 +70,7 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
-    // --- 1. NOTIFICAÇÕES (Pendências) ---
+    // --- 1. NOTIFICAÇÕES (Pendências do Usuário Logado) ---
     if (!userProfile.is_admin && userProfile.escola_id) {
         const { data: cobrancas } = await supabase
             .from('fiscalizacoes_respostas')
@@ -88,15 +91,11 @@ export default function Dashboard() {
     
     if (dataZel) {
         setZeladorias(dataZel);
-        
         const counts = new Array(7).fill(0);
         dataZel.forEach(z => {
-            if (z.etapa_atual >= 1 && z.etapa_atual <= 7) {
-                counts[z.etapa_atual - 1]++;
-            }
+            if (z.etapa_atual >= 1 && z.etapa_atual <= 7) counts[z.etapa_atual - 1]++;
         });
         setEtapasCount(counts);
-
         setStats({
             total: dataZel.length,
             emAndamento: dataZel.filter(z => z.etapa_atual < 7).length,
@@ -104,6 +103,7 @@ export default function Dashboard() {
             isentos: dataZel.filter(z => z.isento_pagamento).length
         });
 
+        // Alertas de Vencimento
         const hoje = new Date();
         const alertas = dataZel
             .filter(z => z.etapa_atual >= 6 && z.data_etapa_6)
@@ -116,36 +116,68 @@ export default function Dashboard() {
             })
             .filter(z => z.diasRestantes < 90)
             .sort((a, b) => a.diasRestantes - b.diasRestantes);
-        
         setAlertasVencimento(alertas);
     }
 
-    // --- 3. ÁGUA (Média Diária do Mês Atual) ---
+    // --- 3. ÁGUA (Média Diária e Justificativas) ---
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString(); // Ultimo dia do mes
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
 
-    let queryWater = supabase.from('consumo_agua').select('consumo_dia').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
-    if (!userProfile.is_admin && userProfile.escola_id) queryWater = queryWater.eq('escola_id', userProfile.escola_id);
+    // Query Base de Água
+    let queryWater = supabase.from('consumo_agua').select('consumo_dia, excedeu_limite').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
+    
+    // CORREÇÃO PEDIDA: Se for admin, NÃO filtra por escola, pega geral.
+    if (!userProfile.is_admin && userProfile.escola_id) {
+        queryWater = queryWater.eq('escola_id', userProfile.escola_id);
+    }
     
     const { data: waterData } = await queryWater;
+    
     if (waterData && waterData.length > 0) {
+        // Cálculo da Média
         const totalConsumo = waterData.reduce((acc, curr) => acc + (Number(curr.consumo_dia) || 0), 0);
-        setWaterAvg(totalConsumo / waterData.length); // Média aritmética dos registros do mês
+        setWaterAvg(totalConsumo / waterData.length);
+
+        // Contagem de Justificativas (Excedeu Limite)
+        const totalJustificativas = waterData.filter(r => r.excedeu_limite).length;
+        setJustificativasMes(totalJustificativas);
     } else {
         setWaterAvg(0);
+        setJustificativasMes(0);
     }
 
-    // --- 4. FISCALIZAÇÃO (Taxa de Resposta) ---
-    let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido');
+    // --- 4. FISCALIZAÇÃO (Taxa e Ranking) ---
+    // Buscar todas as pendências para calcular ranking e taxa
+    let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido, escola_id, escolas(nome)');
     if (!userProfile.is_admin && userProfile.escola_id) queryInsp = queryInsp.eq('escola_id', userProfile.escola_id);
 
     const { data: inspData } = await queryInsp;
+    
     if (inspData && inspData.length > 0) {
+        // Taxa Geral
         const respondidos = inspData.filter(i => i.respondido).length;
         setInspectionRate(Math.round((respondidos / inspData.length) * 100));
+
+        // Ranking de Quem NÃO Respondeu (Apenas para Admin faz mais sentido, mas operaciona vê o seu)
+        const pendentes = inspData.filter(i => !i.respondido);
+        const rankingMap: Record<string, number> = {};
+        
+        pendentes.forEach(p => {
+            const nomeEscola = p.escolas?.nome || 'Desconhecida';
+            rankingMap[nomeEscola] = (rankingMap[nomeEscola] || 0) + 1;
+        });
+
+        // Transforma em array e ordena
+        const rankingArray = Object.entries(rankingMap)
+            .map(([nome, qtd]) => ({ nome, qtd }))
+            .sort((a, b) => b.qtd - a.qtd)
+            .slice(0, 5); // Top 5
+
+        setRankingPendencias(rankingArray);
     } else {
         setInspectionRate(0);
+        setRankingPendencias([]);
     }
 
     // --- 5. USUÁRIOS ---
@@ -165,67 +197,45 @@ export default function Dashboard() {
   const handleExportDashboard = () => {
     const doc = new jsPDF();
     const date = new Date().toLocaleDateString('pt-BR');
-    const time = new Date().toLocaleTimeString('pt-BR');
-
-    // Cabeçalho Azul
+    
     doc.setFillColor(37, 99, 235); doc.rect(0, 0, 210, 40, 'F');
     doc.setTextColor(255, 255, 255); 
     doc.setFontSize(18); doc.setFont("helvetica", "bold"); doc.text("SGE-GSU | Relatório Gerencial", 14, 20);
-    doc.setFontSize(10); doc.setFont("helvetica", "normal"); doc.text(`Gerado em: ${date} às ${time}`, 14, 30);
-    doc.text(`Usuário: ${usuarioLogado?.nome || usuarioLogado?.email}`, 14, 35);
+    doc.setFontSize(10); doc.setFont("helvetica", "normal"); doc.text(`Gerado em: ${date}`, 14, 30);
 
     doc.setTextColor(0, 0, 0);
     let y = 55;
 
-    // Seção 1: Indicadores Gerais
-    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("1. Indicadores de Performance (KPIs)", 14, y);
+    // Seção 1: Indicadores
+    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("1. KPIs Gerais", 14, y);
+    y += 10;
+    doc.setFontSize(11); doc.setFont("helvetica", "normal");
+    
+    const kpis = [
+        `Total Zeladorias: ${stats.total}`,
+        `Consumo Médio Água: ${waterAvg.toFixed(1)} m³/dia`,
+        `Justificativas de Água (Mês): ${justificativasMes}`,
+        `Taxa Resposta Fiscalização: ${inspectionRate}%`
+    ];
+    kpis.forEach(k => { doc.text(`• ${k}`, 14, y); y += 7; });
+
     y += 10;
     
-    doc.setFontSize(11); doc.setFont("helvetica", "normal");
-    const kpis = [
-        `Total de Processos de Zeladoria: ${stats.total}`,
-        `Processos Em Andamento: ${stats.emAndamento}`,
-        `Ocupações Vigentes (Concluídos): ${stats.concluidos}`,
-        `Isentos de Pagamento: ${stats.isentos}`,
-        `Média Consumo Água (Mês Atual): ${waterAvg.toFixed(1)} m³/dia`,
-        `Taxa de Resposta Fiscalização: ${inspectionRate}%`
-    ];
-
-    kpis.forEach(kpi => {
-        doc.text(`• ${kpi}`, 14, y);
-        y += 7;
-    });
-
-    y += 10;
-
-    // Seção 2: Funil de Processos
-    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("2. Distribuição por Etapa (Funil)", 14, y);
-    y += 10;
-    doc.setFontSize(11); doc.setFont("helvetica", "normal");
-    NOMES_ETAPAS.forEach((nome, i) => {
-        doc.text(`${nome}: ${etapasCount[i]} processos`, 14, y);
-        y += 7;
-    });
-
-    y += 10;
-
-    // Seção 3: Alertas
-    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("3. Alertas Críticos (Vencimentos Próximos)", 14, y);
-    y += 10;
-    doc.setFontSize(10);
-    if (alertasVencimento.length === 0) {
-        doc.setTextColor(0, 100, 0); doc.text("Nenhum alerta crítico no momento.", 14, y);
-    } else {
-        doc.setTextColor(200, 0, 0);
-        alertasVencimento.forEach(a => {
-            doc.text(`[${a.diasRestantes} dias] ${a.escolas?.nome} - ${a.nome_zelador}`, 14, y);
-            y += 6;
+    // Seção 2: Ranking Pendências
+    if (rankingPendencias.length > 0) {
+        doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("2. Escolas com Mais Pendências (Fiscalização)", 14, y);
+        y += 10;
+        doc.setFontSize(11); doc.setFont("helvetica", "normal");
+        rankingPendencias.forEach((r, i) => {
+            doc.text(`${i+1}. ${r.nome}: ${r.qtd} pendências`, 14, y);
+            y += 7;
         });
     }
 
-    doc.save(`dashboard_sge_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`dashboard_${date.replace(/\//g, '-')}.pdf`);
   };
 
+  // ... (Funções de Usuário: handleSave, handleDelete mantidas iguais) ...
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoadingAction(true);
@@ -246,6 +256,7 @@ export default function Dashboard() {
   const openEdit = (user: any) => { setFormData({ id: user.id, nome: user.nome, email: user.email, senha: '', perfil: user.perfil, escola_id: user.escola_id || '' }); setModalType('edit'); };
   const openReset = (user: any) => { setFormData({ ...formData, id: user.id, nome: user.nome, senha: '' }); setModalType('reset'); };
 
+
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
 
   return (
@@ -263,145 +274,171 @@ export default function Dashboard() {
       </aside>
 
       <main className="flex-1 p-10 overflow-auto relative">
-        {/* Notificações */}
-        {notificacoesPendentes.length > 0 && (
-             <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
-                <div>
-                    <h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Atenção: Pendência de Fiscalização</h3>
-                    <p className="text-red-600 mt-2 font-medium">Preencha o questionário de limpeza referente à(s) data(s):</p>
-                    <ul className="mt-2 list-disc list-inside text-red-800 font-bold ml-2">
-                        {notificacoesPendentes.map(n => (<li key={n.id}>{new Date(n.fiscalizacoes_eventos.data_referencia).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</li>))}
-                    </ul>
-                </div>
-                <Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg transition-transform hover:scale-105">Responder Agora</Link>
-             </div>
-        )}
-
+        
+        {/* HEADER */}
         <header className="flex justify-between items-center mb-10">
           <div>
             <h1 className="text-3xl font-black tracking-tight">Painel de Controle</h1>
             <p className="text-slate-500 font-medium">Bem-vindo, <span className="text-blue-600 font-bold">{usuarioLogado?.nome || usuarioLogado?.email}</span></p>
           </div>
           <button onClick={handleExportDashboard} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-3 rounded-xl font-bold flex gap-2 border border-slate-200 shadow-sm transition-all">
-            <FileDown size={20}/> Exportar Dashboard
+            <FileDown size={20}/> Exportar Relatório
           </button>
         </header>
 
-        {/* --- CARDS DE STATUS GERAL --- */}
-        <section className="mb-12">
-            <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><LayoutDashboard size={20} className="text-blue-500"/> Visão Geral e Indicadores</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                {/* 1. Zeladorias Totais */}
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden">
-                    <div className="absolute right-[-10px] top-[-10px] bg-blue-50 w-24 h-24 rounded-full opacity-50"></div>
-                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Total de Zeladorias</span>
-                    <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div>
-                        <span className="text-4xl font-black text-slate-800">{stats.total}</span>
-                    </div>
+        {/* --- ALERTAS DE PENDÊNCIA (Só aparece se tiver) --- */}
+        {notificacoesPendentes.length > 0 && (
+             <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
+                <div>
+                    <h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Pendência de Fiscalização</h3>
+                    <p className="text-red-600 mt-1 font-medium">Você possui questionários não respondidos.</p>
                 </div>
+                <Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg">Resolver</Link>
+             </div>
+        )}
 
-                {/* 2. Em Andamento */}
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden">
-                    <div className="absolute right-[-10px] top-[-10px] bg-orange-50 w-24 h-24 rounded-full opacity-50"></div>
-                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Processos Ativos</span>
-                    <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-orange-50 text-orange-600 rounded-xl"><Clock size={24} /></div>
-                        <span className="text-4xl font-black text-slate-800">{stats.emAndamento}</span>
-                    </div>
+        {/* --- 1. CARDS DE INDICADORES (LINHA SUPERIOR) --- */}
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+            {/* Card Zeladoria */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div>
+                    <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Zeladorias</span>
                 </div>
-
-                {/* 3. Média Água (NOVO) */}
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden">
-                    <div className="absolute right-[-10px] top-[-10px] bg-cyan-50 w-24 h-24 rounded-full opacity-50"></div>
-                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Consumo Médio (Água)</span>
-                    <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-cyan-50 text-cyan-600 rounded-xl"><Droplets size={24} /></div>
-                        <div>
-                            <span className="text-3xl font-black text-slate-800">{waterAvg.toFixed(1)}</span>
-                            <span className="text-xs font-bold text-slate-400 ml-1">m³/dia</span>
-                        </div>
-                    </div>
-                    <span className="text-[10px] text-slate-400 z-10 mt-1">Média diária no mês atual</span>
+                <div>
+                    <span className="text-4xl font-black text-slate-800">{stats.total}</span>
+                    <p className="text-slate-400 text-xs mt-1">Processos cadastrados</p>
                 </div>
+            </div>
 
-                {/* 4. Taxa Fiscalização (NOVO) */}
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-2 relative overflow-hidden">
-                    <div className="absolute right-[-10px] top-[-10px] bg-indigo-50 w-24 h-24 rounded-full opacity-50"></div>
-                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider z-10">Conformidade (Fiscal)</span>
-                    <div className="flex items-center gap-3 z-10">
-                        <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><ClipboardList size={24} /></div>
-                        <div>
-                            <span className="text-3xl font-black text-slate-800">{inspectionRate}%</span>
-                        </div>
-                    </div>
-                    <span className="text-[10px] text-slate-400 z-10 mt-1">Taxa de resposta aos questionários</span>
+            {/* Card Média Água */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="p-3 bg-cyan-50 text-cyan-600 rounded-xl"><Droplets size={24} /></div>
+                    <span className="bg-cyan-100 text-cyan-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Média Mensal</span>
+                </div>
+                <div>
+                    <span className="text-4xl font-black text-slate-800">{waterAvg.toFixed(1)}</span>
+                    <span className="text-sm font-bold text-slate-400 ml-1">m³/dia</span>
+                    <p className="text-slate-400 text-xs mt-1">Consumo médio diário</p>
+                </div>
+            </div>
+
+            {/* Card Justificativas (NOVO) */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="p-3 bg-red-50 text-red-600 rounded-xl"><FileWarning size={24} /></div>
+                    <span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Alertas Água</span>
+                </div>
+                <div>
+                    <span className="text-4xl font-black text-slate-800">{justificativasMes}</span>
+                    <p className="text-slate-400 text-xs mt-1">Justificativas este mês</p>
+                </div>
+            </div>
+
+            {/* Card Fiscalização */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><ClipboardList size={24} /></div>
+                    <span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Respostas</span>
+                </div>
+                <div>
+                    <span className="text-4xl font-black text-slate-800">{inspectionRate}%</span>
+                    <p className="text-slate-400 text-xs mt-1">Taxa de conformidade</p>
                 </div>
             </div>
         </section>
 
-        <section className="mb-16">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* --- GRÁFICO DE BARRAS (FUNIL) --- */}
-                <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                    <div className="flex items-center gap-2 mb-6">
-                        <BarChart3 className="text-blue-600" />
-                        <h3 className="text-lg font-bold text-slate-800">Distribuição por Etapa</h3>
-                    </div>
+        {/* --- 2. GRÁFICOS E RANKINGS (LINHA DO MEIO) --- */}
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
+            
+            {/* Gráfico Funil (Zeladoria) */}
+            <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-6">
+                    <BarChart3 className="text-blue-600" />
+                    <h3 className="text-lg font-bold text-slate-800">Status dos Processos (Funil)</h3>
+                </div>
+                <div className="space-y-4">
+                    {NOMES_ETAPAS.map((nome, index) => {
+                        const count = etapasCount[index];
+                        const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
+                        const isConcluido = index === 6;
+                        return (
+                            <div key={index} className="group">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className={`text-xs font-bold ${count > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{nome}</span>
+                                    <span className={`text-xs font-black ${isConcluido ? 'text-green-600' : 'text-blue-600'}`}>{count}</span>
+                                </div>
+                                <div className="w-full bg-slate-50 rounded-full h-2 overflow-hidden">
+                                    <div className={`h-full rounded-full transition-all duration-1000 ${isConcluido ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${percentage > 0 ? Math.max(percentage, 2) : 0}%` }}></div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {/* Ranking de Pendências (NOVO GRÁFICO) */}
+            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-6">
+                    <ListX className="text-red-500" />
+                    <h3 className="text-lg font-bold text-slate-800">Ranking de Pendências</h3>
+                </div>
+                
+                {rankingPendencias.length > 0 ? (
                     <div className="space-y-5">
-                        {NOMES_ETAPAS.map((nome, index) => {
-                            const count = etapasCount[index];
-                            const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0;
-                            const isConcluido = index === 6;
-                            return (
-                                <div key={index} className="group">
-                                    <div className="flex justify-between items-center mb-1.5">
-                                        <span className={`text-sm font-bold ${count > 0 ? 'text-slate-700' : 'text-slate-400'}`}>{nome}</span>
-                                        <span className={`text-sm font-black ${isConcluido ? 'text-green-600' : 'text-blue-600'}`}>{count}</span>
+                        {rankingPendencias.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-red-50 text-red-600 font-bold flex items-center justify-center text-xs shrink-0">{idx + 1}º</div>
+                                <div className="flex-1">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-bold text-slate-700 truncate max-w-[120px]" title={item.nome}>{item.nome}</span>
+                                        <span className="text-xs font-black text-red-600">{item.qtd} un.</span>
                                     </div>
-                                    <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
-                                        <div className={`h-full rounded-full transition-all duration-1000 ease-out ${isConcluido ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${percentage > 0 ? Math.max(percentage, 2) : 0}%` }}></div>
+                                    <div className="w-full bg-slate-50 rounded-full h-2">
+                                        <div className="bg-red-400 h-2 rounded-full" style={{ width: `${Math.min((item.qtd / rankingPendencias[0].qtd) * 100, 100)}%` }}></div>
                                     </div>
                                 </div>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                {/* --- ALERTAS DE VENCIMENTO --- */}
-                <div className="lg:col-span-1">
-                    {alertasVencimento.length > 0 ? (
-                        <div className="bg-red-50/50 p-6 rounded-3xl border border-red-100 h-full">
-                            <div className="flex items-center gap-2 mb-4"><AlertTriangle className="text-red-500 animate-pulse"/><h3 className="text-lg font-bold text-slate-800">Vencimentos</h3></div>
-                            <div className="flex flex-col gap-3">
-                                {alertasVencimento.map(alerta => (
-                                    <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-1">
-                                        <h4 className="font-bold text-slate-800 text-sm truncate">{alerta.escolas?.nome}</h4>
-                                        <p className="text-xs text-slate-500">{alerta.nome_zelador}</p>
-                                        <div className={`mt-1 flex items-center gap-1.5 px-2 py-1 rounded-lg w-fit text-[10px] font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
-                                            <Clock size={10}/> {alerta.diasRestantes < 0 ? `Venceu há ${Math.abs(alerta.diasRestantes)} dias` : `Vence em ${alerta.diasRestantes} dias`}
-                                        </div>
-                                    </div>
-                                ))}
                             </div>
-                        </div>
-                    ) : (
-                        <div className="bg-green-50/50 p-8 rounded-3xl border border-green-100 h-full flex flex-col items-center justify-center text-center gap-4">
-                            <div className="bg-green-100 p-4 rounded-full text-green-600"><CheckCircle2 size={32}/></div>
-                            <div><h3 className="font-bold text-green-800 text-lg">Tudo em dia!</h3><p className="text-green-600 text-sm">Nenhum contrato vencendo nos próximos 90 dias.</p></div>
-                        </div>
-                    )}
-                </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-center pb-8 opacity-50">
+                        <CheckCircle2 size={48} className="text-green-500 mb-2"/>
+                        <p className="text-sm font-bold text-slate-500">Tudo em dia!</p>
+                        <p className="text-xs text-slate-400">Nenhuma pendência crítica.</p>
+                    </div>
+                )}
             </div>
         </section>
 
-        {/* --- SISTEMA / USUÁRIOS --- */}
+        {/* --- 3. ALERTAS DE VENCIMENTO --- */}
+        <section className="mb-10">
+             {alertasVencimento.length > 0 ? (
+                <div className="bg-red-50/50 p-6 rounded-3xl border border-red-100">
+                    <div className="flex items-center gap-2 mb-4"><AlertTriangle className="text-red-500 animate-pulse"/><h3 className="text-lg font-bold text-slate-800">Próximos Vencimentos (Zeladoria)</h3></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {alertasVencimento.map(alerta => (
+                            <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
+                                <div>
+                                    <h4 className="font-bold text-slate-800 text-sm truncate w-40">{alerta.escolas?.nome}</h4>
+                                    <p className="text-xs text-slate-500">{alerta.nome_zelador}</p>
+                                </div>
+                                <div className={`px-3 py-1 rounded-lg text-xs font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                                    {alerta.diasRestantes < 0 ? `${Math.abs(alerta.diasRestantes)} dias atrasado` : `${alerta.diasRestantes} dias`}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+        </section>
+
+        {/* --- 4. LISTA DE USUÁRIOS --- */}
         <section className="border-t border-slate-200 pt-10">
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-3"><div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Users size={20} /></div><h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2></div>
-                {usuarioLogado?.is_admin && (
-                    <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"><Plus size={16}/> Adicionar Usuário</button>
-                )}
+                {usuarioLogado?.is_admin && <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"><Plus size={16}/> Adicionar Usuário</button>}
             </div>
             <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
                 <table className="w-full text-left">
@@ -428,7 +465,7 @@ export default function Dashboard() {
             </div>
         </section>
 
-        {/* Modais */}
+        {/* MODAL USUÁRIOS */}
         {modalType && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md animate-in zoom-in duration-200">
