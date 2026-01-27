@@ -4,8 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, 
   Home, LayoutDashboard, FileText, CheckCircle2, AlertTriangle, Clock, 
-  Banknote, BarChart3, Presentation, Bell 
-} from 'lucide-react';
+  Banknote, BarChart3, Presentation, Bell, Droplets 
+} from 'lucide-react'; // Adicionei 'Droplets'
 import { supabase } from '@/app/lib/supabase';
 import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword } from './actions';
 import Link from 'next/link';
@@ -28,7 +28,7 @@ export default function Dashboard() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [zeladorias, setZeladorias] = useState<any[]>([]); 
   const [alertasVencimento, setAlertasVencimento] = useState<any[]>([]); 
-  const [notificacoesPendentes, setNotificacoesPendentes] = useState<any[]>([]); // NOVO: Notificações
+  const [notificacoesPendentes, setNotificacoesPendentes] = useState<any[]>([]);
   
   // Estatísticas
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
@@ -68,8 +68,8 @@ export default function Dashboard() {
             .from('fiscalizacoes_respostas')
             .select('*, fiscalizacoes_eventos(data_referencia)')
             .eq('escola_id', userProfile.escola_id)
-            .eq('notificado', true) // Admin mandou notificar
-            .eq('respondido', false); // Ainda não respondeu
+            .eq('notificado', true)
+            .eq('respondido', false);
 
         if (cobrancas) setNotificacoesPendentes(cobrancas);
     }
@@ -166,15 +166,15 @@ export default function Dashboard() {
         <nav className="flex-1 space-y-2">
           <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg"><LayoutDashboard size={20} /> <span>Painel</span></div>
           <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
-          
-          {/* MENU FISCALIZAÇÃO */}
           <Link href="/fiscalizacoes" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><CheckCircle2 size={20} /> <span>Fiscalização</span></Link>
+          
+          {/* BOTÃO NOVO: CONSUMO DE ÁGUA */}
+          <Link href="/consumo" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Droplets size={20} /> <span>Hidrômetro</span></Link>
 
           {usuarioLogado?.is_admin && (
             <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>
           )}
           
-          {/* BOTÃO DE APRESENTAÇÃO */}
           <Link href="/apresentacao" className="flex items-center gap-3 p-3 text-yellow-400 hover:text-white hover:bg-yellow-600/20 rounded-xl transition-all border border-dashed border-yellow-600/30 mt-4">
             <Presentation size={20} /> <span>Apresentação</span>
           </Link>
@@ -184,7 +184,7 @@ export default function Dashboard() {
 
       <main className="flex-1 p-10 overflow-auto relative">
         
-        {/* --- ALERTA DE COBRANÇA (VISÍVEL APENAS SE HOUVER PENDÊNCIA) --- */}
+        {/* ALERTAS */}
         {notificacoesPendentes.length > 0 && (
              <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
                 <div>
@@ -202,10 +202,9 @@ export default function Dashboard() {
                         ))}
                     </ul>
                 </div>
-                {/* Botão fake para simular ação, ou pode direcionar para uma page de resposta */}
-                <button className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg transition-transform hover:scale-105">
+                <Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg transition-transform hover:scale-105">
                     Responder Agora
-                </button>
+                </Link>
              </div>
         )}
 

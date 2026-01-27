@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// Adicionei 'Trash2' nos imports
+// Ícone Trash2 adicionado para o botão de exclusão
 import { School, ShieldCheck, Plus, Loader2, ArrowLeft, Building2, MapPin, User, Phone, Mail, Edit, Filter, Search, X, UserCheck, Trash2 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-// Importe a nova função deleteEscola
+// Importação da nova função deleteEscola
 import { createEscola, updateEscola, deleteEscola, getFiscais } from '../actions';
 import Link from 'next/link';
 
@@ -73,9 +73,10 @@ export default function EscolasPage() {
 
   // --- NOVA FUNÇÃO DE EXCLUSÃO ---
   const handleDelete = async (id: string, nome: string) => {
-    if (confirm(`Tem certeza que deseja EXCLUIR a escola "${nome}"?\n\nEssa ação não pode ser desfeita.`)) {
+    if (confirm(`Tem certeza que deseja EXCLUIR a escola "${nome}"?\n\nEssa ação não pode ser desfeita e pode falhar se houver dados vinculados (usuários, processos, etc).`)) {
         setLoading(true);
         const res = await deleteEscola(id);
+        
         if (res.error) {
             alert(res.error);
         } else {
@@ -114,6 +115,7 @@ export default function EscolasPage() {
           <button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Nova Escola</button>
         </header>
 
+        {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 items-center">
             <div className="flex items-center gap-2 text-slate-500 font-bold text-sm"><Filter size={18} /> Filtros:</div>
             <div className="relative flex-1"><Search size={16} className="absolute left-3 top-3 text-slate-400"/><input placeholder="Nome da escola..." value={filtroNome} onChange={e => setFiltroNome(e.target.value)} className="w-full bg-slate-50 border border-slate-200 pl-10 p-2.5 rounded-xl text-sm outline-none"/></div>
@@ -122,6 +124,7 @@ export default function EscolasPage() {
             {(filtroNome || filtroPolo || filtroDiretor) && <button onClick={limparFiltros} className="flex items-center gap-1 text-sm text-red-500 font-bold hover:bg-red-50 px-3 py-2 rounded-xl transition-colors"><X size={16} /> Limpar</button>}
         </div>
 
+        {/* Grid de Escolas */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           {escolasFiltradas.map(escola => (
             <div key={escola.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-3 hover:shadow-md transition-all group">
@@ -140,8 +143,8 @@ export default function EscolasPage() {
                   </div>
                 </div>
                 
-                {/* BOTÕES DE AÇÃO */}
-                <div className="flex gap-2">
+                {/* BOTÕES DE AÇÃO (EDITAR E EXCLUIR) */}
+                <div className="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
                     <button onClick={() => openEdit(escola)} className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar"><Edit size={18}/></button>
                     <button onClick={() => handleDelete(escola.id, escola.nome)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Excluir"><Trash2 size={18}/></button>
                 </div>
@@ -155,12 +158,14 @@ export default function EscolasPage() {
           ))}
         </div>
 
+        {/* Modal de Criação/Edição */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
              <div className="bg-white rounded-3xl p-6 w-full max-w-2xl animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
                 <h3 className="font-black text-xl mb-6">{isEditing ? 'Editar Escola' : 'Nova Escola'}</h3>
                 <form onSubmit={handleSubmit} className="space-y-6">
                   
+                  {/* Bloco 1: Dados da Escola */}
                   <div>
                       <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-3 border-b border-blue-100 pb-1">Dados da Unidade</h4>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -172,6 +177,7 @@ export default function EscolasPage() {
                       </div>
                   </div>
 
+                  {/* Bloco 2: Vínculo Fiscal */}
                   <div>
                       <h4 className="text-xs font-black text-green-600 uppercase tracking-widest mb-3 border-b border-green-100 pb-1 flex items-center gap-2"><UserCheck size={14}/> Vínculo de Fiscalização</h4>
                       <div className="bg-green-50/50 p-4 rounded-xl border border-green-100">
