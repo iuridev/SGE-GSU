@@ -2,20 +2,25 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { createClient } from '@supabase/supabase-js'
 
-// --- HELPER: CLIENTE ADMIN (Para garantir que o sistema consiga notificar os Admins) ---
-const getSupabaseAdmin = () => {
-  // Tenta pegar a chave de serviço (Service Role) ou usa a anônima (caso não configurada, mas ideal é a Service)
+// --- HELPER: CLIENTE ADMIN (Usando apenas @supabase/ssr) ---
+// Isso evita o erro de "Module not found: @supabase/supabase-js"
+const getSupabaseAdmin = async () => {
+  const cookieStore = await cookies();
+  
+  // Tenta usar a chave de serviço do ambiente, se não tiver, usa a anônima
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return createClient(
+  
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     adminKey!,
     {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
+      cookies: {
+        get(name: string) { return cookieStore.get(name)?.value },
+        // Admin não precisa setar cookies, apenas ler/escrever dados
+        set(name: string, value: string, options: any) { },
+        remove(name: string, options: any) { },
+      },
     }
   );
 }
@@ -43,8 +48,8 @@ export async function createNewUser(data: any) {
   if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
 
   // 2. Criar Registro na Tabela 'usuarios'
-  // Usamos adminClient para evitar bloqueio de RLS na criação por outro usuário
-  const adminClient = getSupabaseAdmin();
+  // Usamos adminClient para evitar bloqueio de RLS
+  const adminClient = await getSupabaseAdmin();
   
   const { error: dbError } = await adminClient.from('usuarios').insert({
     id: authUser.user.id,
@@ -80,7 +85,7 @@ export async function updateSystemUser(id: string, data: any) {
 }
 
 export async function deleteSystemUser(id: string) {
-  const supabase = getSupabaseAdmin(); 
+  const supabase = await getSupabaseAdmin(); 
   
   // 1. Remover da tabela usuarios
   const { error: dbError } = await supabase.from('usuarios').delete().eq('id', id);
@@ -94,7 +99,7 @@ export async function deleteSystemUser(id: string) {
 }
 
 export async function resetUserPassword(id: string, newPassword: string) {
-  const supabase = getSupabaseAdmin();
+  const supabase = await getSupabaseAdmin();
   const { error } = await supabase.auth.admin.updateUserById(id, { password: newPassword });
   if (error) return { error: error.message };
   return { success: true };
@@ -193,8 +198,6 @@ export async function saveConsumoAgua(data: any) {
 
 export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
     const cookieStore = await cookies();
-    
-    // Verifica usuário para definir nível de acesso
     const authClient = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -207,7 +210,8 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
     if (user) {
         const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
         if (profile?.perfil === 'Regional') {
-            supabaseClient = getSupabaseAdmin(); // Admin vê tudo
+            // Se for admin, usa o cliente admin para ver tudo
+            supabaseClient = await getSupabaseAdmin();
         }
     }
 
@@ -257,34 +261,25 @@ export async function reportarQuedaEnergia(data: any) {
 
     if (error) throw error;
 
-    // Buscar dados para enriquecer as mensagens
     const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
     const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
 
-    // Data formatada no fuso de Brasília
     const dataHoraBrasilia = new Date().toLocaleString('pt-BR', { 
         timeZone: 'America/Sao_Paulo',
         dateStyle: 'short',
         timeStyle: 'medium'
     });
 
-    // ---------------------------------------------------------
     // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
-    // ---------------------------------------------------------
     if (!data.resolvido_antecipadamente) {
-        // Usamos getSupabaseAdmin() para ignorar RLS. 
-        const adminClient = getSupabaseAdmin();
+        const adminClient = await getSupabaseAdmin();
 
-        // Buscar todos os usuários com perfil Regional
         const { data: admins, error: adminErr } = await adminClient
             .from('usuarios')
             .select('id')
             .eq('perfil', 'Regional');
 
-        if (adminErr) {
-            console.error("Erro ao buscar admins:", adminErr);
-        } else if (admins && admins.length > 0) {
-            
+        if (admins && admins.length > 0) {
             const notificacoes = admins.map(admin => ({
                 usuario_id: admin.id,
                 titulo: `⚡ Queda de Energia: ${escola?.nome}`,
@@ -292,13 +287,11 @@ export async function reportarQuedaEnergia(data: any) {
                 lida: false
             }));
 
-            // Insere as notificações
             const { error: notifErr } = await adminClient.from('notificacoes_sistema').insert(notificacoes);
             if (notifErr) console.error("Erro ao inserir notificação interna:", notifErr);
         }
     }
 
-    // 3. Retornar dados para o Front (WhatsApp)
     return { 
         success: true, 
         dados_mensagem: {
@@ -309,12 +302,10 @@ export async function reportarQuedaEnergia(data: any) {
     };
 
   } catch (error: any) { 
-      console.error("Erro ao processar queda energia:", error);
       return { error: error.message }; 
   }
 }
 
-// Atualizar status da notificação (Sino)
 export async function marcarNotificacaoLida(id: string) {
     const cookieStore = await cookies();
     const supabase = createServerClient(
