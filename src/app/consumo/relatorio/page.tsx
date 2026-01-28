@@ -5,23 +5,24 @@ import {
   ArrowLeft, FileDown, Search, Droplets, Calendar, Filter, Loader2, AlertTriangle, Building2
 } from 'lucide-react';
 import Link from 'next/link';
-import { getRelatorioConsumoGeral } from '@/app/actions';
-import { supabase } from '@/app/lib/supabase'; // Necessário para checar perfil
+import { getRelatorioConsumoGeral } from '@/app/actions'; //
+import { supabase } from '@/app/lib/supabase'; //
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 export default function RelatorioAguaPage() {
   const [loading, setLoading] = useState(true);
   
-  // Dados principais
+  // Dados
   const [registros, setRegistros] = useState<any[]>([]);
   const [registrosFiltrados, setRegistrosFiltrados] = useState<any[]>([]);
-  
-  // Contexto do Usuário
+  const [mediaGeral, setMediaGeral] = useState(0);
+
+  // Controle de Perfil
   const [isAdmin, setIsAdmin] = useState(false);
   const [listaEscolas, setListaEscolas] = useState<any[]>([]);
 
-  // Filtros
+  // Filtros (Padrão: Mês Atual)
   const hoje = new Date();
   const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split('T')[0];
   const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).toISOString().split('T')[0];
@@ -29,73 +30,74 @@ export default function RelatorioAguaPage() {
   const [filtro, setFiltro] = useState({
     inicio: primeiroDia,
     fim: ultimoDia,
-    escolaId: '' // Usado apenas se for Admin
+    escolaId: '' // Usado apenas pelo Regional
   });
 
-  const [mediaGeral, setMediaGeral] = useState(0);
-
-  // 1. Inicialização: Identifica usuário e carrega dados iniciais
+  // 1. Inicialização
   useEffect(() => {
     init();
   }, []);
 
-  // 2. Efeito para filtrar localmente quando mudar a escola (UX para Admin)
+  // 2. Reaplica filtros locais quando muda a seleção de escola (apenas visual)
   useEffect(() => {
-    aplicarFiltrosLocais();
+    filtrarDadosLocais();
   }, [filtro.escolaId, registros]);
 
   const init = async () => {
     setLoading(true);
     
-    // A. Identificar Perfil
+    // A. Identificar quem é o usuário
     const { data: { user } } = await supabase.auth.getUser();
+    
     if (user) {
+        // Busca o perfil na tabela usuarios
         const { data: profile } = await supabase
             .from('usuarios')
             .select('perfil')
-            .eq('email', user.email)
+            .eq('id', user.id) // Busca pelo ID vinculado ao Auth
             .single();
         
         const ehRegional = profile?.perfil === 'Regional';
         setIsAdmin(ehRegional);
 
-        // B. Se for Regional, carregar lista de escolas para o dropdown
+        // B. Se for Regional, carrega a lista de escolas para o dropdown
         if (ehRegional) {
             const { data: escolas } = await supabase.from('escolas').select('id, nome').order('nome');
             setListaEscolas(escolas || []);
         }
     }
 
-    // C. Buscar Relatório (O RLS do banco decide o que vem aqui)
-    await buscarDados();
+    // C. Buscar Relatório
+    // O RLS do banco de dados vai decidir o que volta aqui.
+    // Se for Regional, volta TUDO. Se for Operacional, volta SÓ A ESCOLA DELE.
+    await buscarDadosServidor();
+    
     setLoading(false);
   };
 
-  const buscarDados = async () => {
+  const buscarDadosServidor = async () => {
     setLoading(true);
-    // Chama a server action. 
-    // Graças ao RLS: Regional recebe TUDO. Operacional recebe SÓ O DELE.
     const res = await getRelatorioConsumoGeral(filtro.inicio, filtro.fim);
     
     if (res.success && res.data) {
-        setRegistros(res.data); // Salva os dados "brutos" retornados pelo banco
+        setRegistros(res.data);
     } else {
-        alert("Erro ao buscar dados: " + res.error);
+        alert("Erro ao buscar dados: " + (res.error || "Erro desconhecido"));
     }
     setLoading(false);
   };
 
-  const aplicarFiltrosLocais = () => {
+  const filtrarDadosLocais = () => {
     let dados = [...registros];
 
-    // Se for admin e selecionou uma escola específica, filtra a lista
+    // Se for Admin e escolheu uma escola específica no dropdown
     if (isAdmin && filtro.escolaId) {
         dados = dados.filter(r => r.escola_id === filtro.escolaId);
     }
 
     setRegistrosFiltrados(dados);
 
-    // Recalcula Média baseada na visão atual
+    // Calcular Média da visualização atual
     if (dados.length > 0) {
         const total = dados.reduce((acc: number, r: any) => acc + (Number(r.consumo_dia) || 0), 0);
         setMediaGeral(total / dados.length);
@@ -107,23 +109,19 @@ export default function RelatorioAguaPage() {
   const gerarPDF = () => {
     const doc = new jsPDF();
     
-    doc.setFillColor(6, 182, 212); 
+    // Cabeçalho PDF
+    doc.setFillColor(6, 182, 212); // Ciano
     doc.rect(0, 0, 210, 40, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(22);
     doc.text("Relatório de Consumo de Água", 14, 25);
-    
     doc.setFontSize(10);
-    doc.text(`Gerado por: SGE-GSU | Período: ${new Date(filtro.inicio).toLocaleDateString()} a ${new Date(filtro.fim).toLocaleDateString()}`, 14, 35);
+    doc.text(`Período: ${new Date(filtro.inicio).toLocaleDateString()} a ${new Date(filtro.fim).toLocaleDateString()}`, 14, 35);
 
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(12);
-    doc.text(`Registros Listados: ${registrosFiltrados.length}`, 14, 50);
-    doc.text(`Média de Consumo (Visão Atual): ${mediaGeral.toFixed(2)} m³`, 14, 56);
-
+    // Corpo PDF
     const tableData = registrosFiltrados.map(r => [
         new Date(r.data_leitura).toLocaleDateString('pt-BR', {timeZone: 'UTC'}),
-        r.escolas?.nome || 'Desconhecida',
+        r.escolas?.nome || 'Indefinida',
         r.leitura_anterior,
         r.leitura_atual,
         `${r.consumo_dia} m³`,
@@ -132,51 +130,50 @@ export default function RelatorioAguaPage() {
     ]);
 
     autoTable(doc, {
-        startY: 65,
+        startY: 50,
         head: [['Data', 'Escola', 'Leit. Ant', 'Leit. Atual', 'Consumo', 'Alerta', 'Resp.']],
         body: tableData,
         theme: 'grid',
         headStyles: { fillColor: [6, 182, 212] },
         styles: { fontSize: 8 },
         didParseCell: function(data) {
-            if (data.section === 'body' && data.column.index === 5) {
-                if (data.cell.raw === 'SIM') {
-                    data.cell.styles.textColor = [220, 38, 38];
-                    data.cell.styles.fontStyle = 'bold';
-                }
+            // Destaca alertas em vermelho
+            if (data.section === 'body' && data.column.index === 5 && data.cell.raw === 'SIM') {
+                data.cell.styles.textColor = [220, 38, 38];
+                data.cell.styles.fontStyle = 'bold';
             }
         }
     });
 
-    doc.save(`relatorio_agua_${filtro.inicio}_${filtro.fim}.pdf`);
+    doc.save('relatorio_consumo.pdf');
   };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-900">
       
-      {/* Header */}
+      {/* --- CABEÇALHO --- */}
       <div className="max-w-6xl mx-auto mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
-        <div className="flex items-center gap-4 w-full md:w-auto">
+        <div className="flex items-center gap-4 w-full">
             <Link href="/consumo" className="p-3 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-600 transition-colors">
                 <ArrowLeft size={20} />
             </Link>
             <div>
                 <h1 className="text-2xl md:text-3xl font-black text-slate-800 flex items-center gap-2">
                     <Droplets className="text-cyan-500" fill="currentColor" /> 
-                    {isAdmin ? "Relatório Geral (Regional)" : "Relatório da Escola"}
+                    {isAdmin ? "Relatório Geral (Regional)" : "Histórico de Consumo"}
                 </h1>
                 <p className="text-slate-500 font-medium text-sm">
-                    {isAdmin ? "Visão administrativa completa" : "Histórico de consumo da unidade"}
+                    {isAdmin ? "Visão consolidada de todas as unidades" : "Registros da sua unidade escolar"}
                 </p>
             </div>
         </div>
       </div>
 
-      {/* Filtros */}
+      {/* --- FILTROS --- */}
       <div className="max-w-6xl mx-auto bg-white p-6 rounded-3xl shadow-sm border border-slate-100 mb-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             
-            {/* Filtro de Data Início */}
+            {/* Data Início */}
             <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Data Início</label>
                 <div className="flex items-center gap-2 bg-slate-50 border p-3 rounded-xl focus-within:ring-2 ring-cyan-100 transition-all">
@@ -185,7 +182,7 @@ export default function RelatorioAguaPage() {
                 </div>
             </div>
 
-            {/* Filtro de Data Fim */}
+            {/* Data Fim */}
             <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Data Fim</label>
                 <div className="flex items-center gap-2 bg-slate-50 border p-3 rounded-xl focus-within:ring-2 ring-cyan-100 transition-all">
@@ -194,7 +191,7 @@ export default function RelatorioAguaPage() {
                 </div>
             </div>
 
-            {/* Filtro de Escola (APENAS REGIONAL) */}
+            {/* Filtro de Escola (APARECE APENAS SE FOR ADMIN REGIONAL) */}
             {isAdmin ? (
                 <div>
                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Filtrar Escola</label>
@@ -213,23 +210,22 @@ export default function RelatorioAguaPage() {
                     </div>
                 </div>
             ) : (
-                // Espaçador para layout ficar alinhado se não for admin
-                <div className="hidden md:block"></div>
+                <div className="hidden md:block"></div> // Espaçador para layout
             )}
 
-            {/* Botões de Ação */}
+            {/* Botões */}
             <div className="flex gap-2">
-                <button onClick={buscarDados} disabled={loading} className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-lg shadow-cyan-200">
-                    {loading ? <Loader2 className="animate-spin"/> : <Search size={20}/>} <span className="hidden lg:inline">Filtrar</span>
+                <button onClick={buscarDadosServidor} disabled={loading} className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-lg shadow-cyan-200">
+                    {loading ? <Loader2 className="animate-spin"/> : <Search size={20}/>} <span className="hidden lg:inline">Buscar</span>
                 </button>
-                <button onClick={gerarPDF} disabled={registrosFiltrados.length === 0} className="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onClick={gerarPDF} disabled={registrosFiltrados.length === 0} className="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all disabled:opacity-50">
                     <FileDown size={20}/> <span className="hidden lg:inline">PDF</span>
                 </button>
             </div>
         </div>
       </div>
 
-      {/* Cards de Resumo */}
+      {/* --- CARDS RESUMO --- */}
       <div className="max-w-6xl mx-auto mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-gradient-to-br from-cyan-500 to-blue-600 text-white p-6 rounded-3xl shadow-lg flex items-center justify-between relative overflow-hidden">
             <div className="relative z-10">
@@ -239,13 +235,11 @@ export default function RelatorioAguaPage() {
             <div className="bg-white/20 p-3 rounded-2xl backdrop-blur-sm relative z-10">
                 <Filter size={24} className="text-white" />
             </div>
-            {/* Decoração de fundo */}
-            <Droplets size={100} className="absolute -bottom-4 -right-4 text-white/10 rotate-12" />
         </div>
-
+        
         <div className="bg-white text-slate-700 p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
              <div>
-                <p className="text-slate-400 font-bold text-xs uppercase mb-1">Total de Registros</p>
+                <p className="text-slate-400 font-bold text-xs uppercase mb-1">Registros Encontrados</p>
                 <h2 className="text-3xl font-black">{registrosFiltrados.length}</h2>
             </div>
             <div className="bg-slate-50 p-3 rounded-2xl">
@@ -254,7 +248,7 @@ export default function RelatorioAguaPage() {
         </div>
       </div>
 
-      {/* Tabela de Resultados */}
+      {/* --- TABELA DE DADOS --- */}
       <div className="max-w-6xl mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
         <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -270,10 +264,10 @@ export default function RelatorioAguaPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-sm text-slate-700 font-medium">
                     {registrosFiltrados.length === 0 ? (
-                        <tr><td colSpan={6} className="p-10 text-center text-slate-400">Nenhum registro encontrado para os filtros selecionados.</td></tr>
+                        <tr><td colSpan={6} className="p-10 text-center text-slate-400">Nenhum registro encontrado para este período.</td></tr>
                     ) : (
                         registrosFiltrados.map((r) => (
-                            <tr key={r.id} className="hover:bg-slate-50 transition-colors group">
+                            <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-4 whitespace-nowrap">
                                     <div className="font-bold text-slate-800">{new Date(r.data_leitura).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</div>
                                 </td>
@@ -294,13 +288,13 @@ export default function RelatorioAguaPage() {
                                 <td className="p-4">
                                     {r.excedeu_limite ? (
                                         <span className="flex items-center gap-1 text-red-600 font-bold bg-red-50 px-2 py-1 rounded-md text-xs w-fit border border-red-100">
-                                            <AlertTriangle size={12}/> <span className="hidden md:inline">Alerta</span>
+                                            <AlertTriangle size={12}/> Alerta
                                         </span>
                                     ) : (
                                         <span className="text-green-600 font-bold bg-green-50 px-2 py-1 rounded-md text-xs border border-green-100">Normal</span>
                                     )}
                                 </td>
-                                <td className="p-4 text-slate-400 text-xs group-hover:text-slate-600">
+                                <td className="p-4 text-slate-400 text-xs">
                                     {r.usuarios?.nome ? r.usuarios.nome.split(' ')[0] : '-'}
                                 </td>
                             </tr>
