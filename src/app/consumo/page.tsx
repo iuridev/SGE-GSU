@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-// CORREÇÃO: Adicionados Home, FileDown, Search e todos os ícones necessários
 import {
     ShieldCheck, ArrowLeft, Home, Loader2, Plus, Droplets, AlertTriangle,
     CheckCircle2, FileDown, Search, Filter, X, Edit, Info
@@ -18,9 +17,10 @@ export default function ConsumoAguaPage() {
     const [escolas, setEscolas] = useState<any[]>([]);
     const [userProfile, setUserProfile] = useState<any>(null);
 
+    // CORREÇÃO: Filtros podem ser string vazia '' (para "Todos")
     const [filtroEscola, setFiltroEscola] = useState('');
-    const [filtroMes, setFiltroMes] = useState(new Date().getMonth() + 1);
-    const [filtroAno, setFiltroAno] = useState(new Date().getFullYear());
+    const [filtroMes, setFiltroMes] = useState<string | number>(new Date().getMonth() + 1);
+    const [filtroAno, setFiltroAno] = useState<string | number>(new Date().getFullYear());
 
     const [showModal, setShowModal] = useState(false);
     const [leituraAnteriorDados, setLeituraAnteriorDados] = useState<any>(null);
@@ -42,11 +42,10 @@ export default function ConsumoAguaPage() {
 
     useEffect(() => {
         if (userProfile) {
-            // Usa o filtro de escola atual ou vazio se for admin sem seleção
             const escolaParaBuscar = userProfile.is_admin ? filtroEscola : userProfile.escola_id;
             loadRegistros(escolaParaBuscar);
         }
-    }, [filtroMes, filtroAno]); // <--- Dispara ao mudar mês ou ano
+    }, [filtroMes, filtroAno]);
 
     useEffect(() => {
         if (showModal && formData.escola_id && formData.data_leitura) {
@@ -74,7 +73,11 @@ export default function ConsumoAguaPage() {
     };
 
     const loadRegistros = async (escolaId?: string) => {
-        const dados = await getConsumoHistorico(escolaId, filtroMes.toString(), filtroAno.toString());
+        // Se filtro for "0" ou "", manda vazio para buscar tudo
+        const mesParaBuscar = filtroMes ? filtroMes.toString() : '';
+        const anoParaBuscar = filtroAno ? filtroAno.toString() : '';
+        
+        const dados = await getConsumoHistorico(escolaId, mesParaBuscar, anoParaBuscar);
         setRegistros(dados || []);
     };
 
@@ -84,19 +87,15 @@ export default function ConsumoAguaPage() {
 
         const atual = Number(formData.leitura_atual) || 0;
         const pop = Number(formData.populacao) || 0;
-
-        // Comparação segura de Strings (YYYY-MM)
         const mesAtual = formData.data_leitura.substring(0, 7);
         const mesAnterior = anteriorObj?.data_leitura?.substring(0, 7);
-
-        // É o primeiro mês se: Não tem anterior OU o mês é diferente
         const isPrimeiroMes = !anteriorObj || mesAtual !== mesAnterior;
 
         let leituraAnteriorValor = 0;
         let consumo = 0;
 
         if (isPrimeiroMes) {
-            consumo = 0; // Regra: Primeiro registro do mês é zero
+            consumo = 0;
         } else {
             leituraAnteriorValor = Number(anteriorObj.leitura_atual);
             consumo = atual - leituraAnteriorValor;
@@ -116,7 +115,6 @@ export default function ConsumoAguaPage() {
                 return;
             }
         }
-
         const res = await saveConsumoAgua(formData);
         if (res.error) alert(res.error);
         else {
@@ -158,16 +156,16 @@ export default function ConsumoAguaPage() {
         const doc = new jsPDF({ orientation: 'landscape' });
         doc.setFillColor(37, 99, 235); doc.rect(0, 0, 297, 30, 'F');
         doc.setTextColor(255, 255, 255); doc.setFontSize(16); doc.text("Relatório de Consumo de Água", 14, 12);
-        doc.setFontSize(10); doc.text("Unidade Regional de Ensino Guarulhos Sul", 14, 18);
-        doc.text(`Competência: ${filtroMes.toString().padStart(2, '0')}/${filtroAno}`, 14, 24);
+        doc.setFontSize(10); doc.text("SGE-GSU | Relatório de Lista", 14, 18);
+        doc.text(`Filtro: ${filtroMes ? filtroMes : 'Todos'} / ${filtroAno ? filtroAno : 'Todos'}`, 14, 24);
 
         const tableData = registros.map(r => [
             new Date(r.data_leitura).toLocaleDateString('pt-BR', { timeZone: 'UTC' }),
-            r.escolas.nome,
+            r.escolas?.nome || 'Escola',
             r.leitura_anterior,
             r.leitura_atual,
             r.consumo_dia === 0 && r.leitura_anterior === r.leitura_atual ? '0 (Inicial)' : `${r.consumo_dia.toFixed(0)} m³`,
-            `${r.limite_calculado.toFixed(1)} m³`,
+            `${r.limite_calculado?.toFixed(1) || 0} m³`,
             r.populacao,
             r.excedeu_limite ? 'EXCEDEU' : 'NORMAL',
             r.usuarios?.nome || '-'
@@ -184,15 +182,11 @@ export default function ConsumoAguaPage() {
                         data.cell.styles.textColor = [220, 38, 38];
                         data.cell.styles.fontStyle = 'bold';
                     }
-                    if (data.column.index === 4 && data.cell.raw === '0 (Inicial)') {
-                        data.cell.styles.textColor = [37, 99, 235];
-                        data.cell.styles.fontStyle = 'bold';
-                    }
                 }
             }
         });
 
-        doc.save(`consumo_agua_${filtroMes}_${filtroAno}.pdf`);
+        doc.save(`consumo_agua.pdf`);
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
@@ -201,8 +195,6 @@ export default function ConsumoAguaPage() {
         <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
             <aside className="w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
                 <div className="flex items-center gap-2 mb-10 pb-4 border-b border-slate-700"><ShieldCheck className="text-blue-400" /><span className="text-xl font-bold">SGE-GSU</span></div>
-
-                {/* MENU LATERAL */}
                 <Link href="/" className="flex items-center gap-3 p-3 text-slate-400 hover:bg-slate-800 rounded-xl mb-2"><Home size={20} /> Dashboard</Link>
                 <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl font-medium"><Droplets size={20} /> Hidrômetro</div>
             </aside>
@@ -214,33 +206,41 @@ export default function ConsumoAguaPage() {
                         <p className="text-slate-500">Controle diário de utilidade pública</p>
                     </div>
                     <div className="flex gap-2">
-                        {/* BOTÃO PARA PÁGINA DE JUSTIFICATIVAS */}
                         <Link href="/consumo/alertas" className="bg-red-100 hover:bg-red-200 text-red-700 px-4 py-3 rounded-xl font-bold flex gap-2 border border-red-200 items-center transition-colors">
                             <AlertTriangle size={20} /> Justificativas
                         </Link>
-
                         <button onClick={handleExportPDF} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-3 rounded-xl font-bold flex gap-2 border border-slate-200"><FileDown size={20} /> PDF</button>
                         <button onClick={() => { resetForm(); setShowModal(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex gap-2 shadow-lg"><Plus /> Novo Registro</button>
                     </div>
                 </header>
 
-                {/* Filtros */}
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex gap-4 items-center flex-wrap">
                     <div className="flex items-center gap-2 text-slate-500 font-bold text-sm"><Filter size={18} /> Filtros:</div>
+                    
                     {userProfile?.is_admin && (
                         <select value={filtroEscola} onChange={e => { setFiltroEscola(e.target.value); loadRegistros(e.target.value); }} className="bg-slate-50 border p-2 rounded-xl text-sm">
                             <option value="">Todas as Escolas</option>
                             {escolas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                         </select>
                     )}
-                    <select value={filtroMes} onChange={e => { setFiltroMes(Number(e.target.value)); }} className="bg-slate-50 border p-2 rounded-xl text-sm w-32">
+
+                    {/* CORREÇÃO: Opção "Todos" adicionada */}
+                    <select value={filtroMes} onChange={e => { setFiltroMes(e.target.value); }} className="bg-slate-50 border p-2 rounded-xl text-sm w-32">
+                        <option value="">Todos</option>
                         {[...Array(12)].map((_, i) => <option key={i} value={i + 1}>{new Date(0, i).toLocaleString('pt-BR', { month: 'long' })}</option>)}
                     </select>
-                    <input type="number" value={filtroAno} onChange={e => setFiltroAno(Number(e.target.value))} className="bg-slate-50 border p-2 rounded-xl text-sm w-24" />
+
+                    {/* CORREÇÃO: Opção "Todos" adicionada */}
+                    <select value={filtroAno} onChange={e => setFiltroAno(e.target.value)} className="bg-slate-50 border p-2 rounded-xl text-sm w-28">
+                         <option value="">Todos</option>
+                         <option value="2024">2024</option>
+                         <option value="2025">2025</option>
+                         <option value="2026">2026</option>
+                    </select>
+
                     <button onClick={() => loadRegistros(userProfile?.is_admin ? filtroEscola : userProfile?.escola_id)} className="bg-blue-100 text-blue-700 px-3 py-2 rounded-xl text-sm font-bold"><Search size={16} /></button>
                 </div>
 
-                {/* Tabela */}
                 <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
                     <table className="w-full text-left">
                         <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-bold">
@@ -255,14 +255,14 @@ export default function ConsumoAguaPage() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50 text-sm">
-                            {registros.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-slate-400">Nenhum registro encontrado.</td></tr>}
+                            {registros.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-slate-400">Nenhum registro encontrado para este filtro.</td></tr>}
                             {registros.map(reg => (
                                 <tr key={reg.id} className="hover:bg-slate-50">
                                     <td className="p-4 font-bold">{new Date(reg.data_leitura).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</td>
-                                    <td className="p-4">{reg.escolas.nome}</td>
+                                    <td className="p-4">{reg.escolas?.nome}</td>
                                     <td className="p-4 text-xs text-slate-500">Ant: {reg.leitura_anterior} <br /> Atual: <strong>{reg.leitura_atual}</strong></td>
                                     <td className="p-4 font-bold text-lg">{reg.consumo_dia === 0 && reg.leitura_anterior == reg.leitura_atual ? <span className="text-blue-500 text-xs">0 (Início)</span> : `${reg.consumo_dia.toFixed(0)} m³`}</td>
-                                    <td className="p-4 text-slate-500">{reg.limite_calculado.toFixed(1)}</td>
+                                    <td className="p-4 text-slate-500">{reg.limite_calculado?.toFixed(1)}</td>
                                     <td className="p-4">{reg.excedeu_limite ? <span className="text-red-600 font-bold flex items-center gap-1"><AlertTriangle size={14} /> Excedeu</span> : <span className="text-green-600 font-bold flex items-center gap-1"><CheckCircle2 size={14} /> OK</span>}</td>
                                     <td className="p-4 text-right">{userProfile?.is_admin && <button onClick={() => openEdit(reg)} className="text-blue-600 hover:bg-blue-50 p-2 rounded"><Edit size={16} /></button>}</td>
                                 </tr>
@@ -271,7 +271,6 @@ export default function ConsumoAguaPage() {
                     </table>
                 </div>
 
-                {/* Modal Formulário */}
                 {showModal && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
                         <div className="bg-white rounded-3xl p-6 w-full max-w-lg animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
@@ -312,13 +311,9 @@ export default function ConsumoAguaPage() {
                                             }
                                         </span>
                                     </div>
-
                                     <div className="relative">
                                         <input
-                                            required
-                                            type="number"
-                                            step="1"
-                                            placeholder="0000"
+                                            required type="number" step="1" placeholder="0000"
                                             value={formData.leitura_atual}
                                             onChange={e => setFormData({ ...formData, leitura_atual: e.target.value })}
                                             className="w-full bg-white border-2 border-slate-300 p-4 rounded-xl text-3xl font-black text-slate-900 tracking-widest text-center focus:border-blue-500 focus:ring-4 ring-blue-500/10 outline-none"
@@ -328,7 +323,6 @@ export default function ConsumoAguaPage() {
                                         </div>
                                     </div>
 
-                                    {/* Preview do Cálculo */}
                                     {formData.leitura_atual && (
                                         <div className="mt-6 bg-blue-50 rounded-xl p-4 flex justify-between items-center border border-blue-100">
                                             <div>
@@ -340,9 +334,7 @@ export default function ConsumoAguaPage() {
                                                     <span className="text-sm font-bold text-blue-400">m³</span>
                                                 </div>
                                                 <span className="text-[10px] text-blue-300">
-                                                    {calculoPreview.isPrimeiroMes
-                                                        ? "(Leitura Inicial do Mês = 0)"
-                                                        : "(Leitura Atual - Anterior)"}
+                                                    {calculoPreview.isPrimeiroMes ? "(Leitura Inicial do Mês = 0)" : "(Leitura Atual - Anterior)"}
                                                 </span>
                                             </div>
                                             <div className="text-right">
