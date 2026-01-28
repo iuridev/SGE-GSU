@@ -582,7 +582,7 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
 }
 
 // ==========================================
-//    MÓDULO NOTIFICAÇÃO ENERGIA (LIMPO)
+//        MÓDULO NOTIFICAÇÃO ENERGIA
 // ==========================================
 
 export async function reportarQuedaEnergia(data: any) {
@@ -597,7 +597,7 @@ export async function reportarQuedaEnergia(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Salvar no Banco de Dados (Isso garante o registro oficial)
+    // 1. Salvar o Relatório (Igual anterior)
     const { error } = await supabase.from('notificacoes_energia').insert({
         escola_id: data.escola_id,
         registrado_por: user.id,
@@ -610,10 +610,33 @@ export async function reportarQuedaEnergia(data: any) {
 
     if (error) throw error;
 
-    // 2. Retorna dados úteis para o Front-end montar a mensagem do WhatsApp
-    // Buscamos o nome da escola e do usuário para enriquecer a mensagem
+    // Buscar dados para mensagem e notificação
     const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
     const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
+
+    // ---------------------------------------------------------
+    // NOVO: Notificar Administradores (Regional) no Sistema
+    // ---------------------------------------------------------
+    if (!data.resolvido_antecipadamente) {
+        // 1. Buscar todos os Admins
+        const { data: admins } = await supabase
+            .from('usuarios')
+            .select('id')
+            .eq('perfil', 'Regional');
+
+        if (admins && admins.length > 0) {
+            // 2. Criar uma notificação para cada Admin
+            const notificacoes = admins.map(admin => ({
+                usuario_id: admin.id,
+                titulo: `⚡ Queda de Energia: ${escola?.nome}`,
+                mensagem: `Relatado por ${usuario?.nome}. Abrangência: ${data.abrangencia}. "${data.descricao}"`,
+                lida: false
+            }));
+
+            await supabase.from('notificacoes_sistema').insert(notificacoes);
+        }
+    }
+    // ---------------------------------------------------------
 
     return { 
         success: true, 
@@ -625,7 +648,16 @@ export async function reportarQuedaEnergia(data: any) {
     };
 
   } catch (error: any) { 
-      console.error("Erro ao salvar notificação:", error);
+      console.error("Erro ao processar:", error);
       return { error: error.message }; 
   }
+}
+
+// NOVA FUNÇÃO PARA O FRONT-END
+export async function marcarNotificacaoLida(id: string) {
+    const cookieStore = await cookies();
+    const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+    
+    await supabase.from('notificacoes_sistema').update({ lida: true }).eq('id', id);
+    return { success: true };
 }

@@ -5,13 +5,14 @@ import {
   Users, ShieldCheck, Plus, Loader2, LogOut, Trash2, X, School, Edit, Key, 
   Home, LayoutDashboard, CheckCircle2, AlertTriangle, Clock, 
   Banknote, BarChart3, Presentation, Bell, Droplets, ClipboardList, FileDown, 
-  FileWarning, ListX, Zap, ChevronRight, Lightbulb, Power 
+  FileWarning, ListX, Zap, ChevronRight, Lightbulb, Power, BellRing, Check 
 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia } from './actions';
+import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia, marcarNotificacaoLida } from './actions';
 import Link from 'next/link';
 import jsPDF from 'jspdf';
 
+// --- CONSTANTE QUE ESTAVA FALTANDO ---
 const NOMES_ETAPAS = [
   "1. Processo SEI",
   "2. Vistoria e Relatório",
@@ -50,13 +51,13 @@ export default function Dashboard() {
   const [formData, setFormData] = useState({ id: '', nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
   const [loadingAction, setLoadingAction] = useState(false);
 
-  // --- MÓDULO DE ENERGIA ---
+  // --- NOTIFICAÇÕES E ENERGIA ---
+  const [notificacoesSistema, setNotificacoesSistema] = useState<any[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  
   const [showEnergyModal, setShowEnergyModal] = useState(false);
   const [energyStep, setEnergyStep] = useState(1);
-  const [energyData, setEnergyData] = useState({
-    abrangencia: '',
-    descricao: ''
-  });
+  const [energyData, setEnergyData] = useState({ abrangencia: '', descricao: '' });
 
   useEffect(() => {
     const init = async () => {
@@ -78,11 +79,13 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
+    // 1. Notificações Pendentes (Fiscalização)
     if (!userProfile.is_admin && userProfile.escola_id) {
         const { data: cobrancas } = await supabase.from('fiscalizacoes_respostas').select('*, fiscalizacoes_eventos(data_referencia)').eq('escola_id', userProfile.escola_id).eq('notificado', true).eq('respondido', false);
         if (cobrancas) setNotificacoesPendentes(cobrancas);
     }
 
+    // 2. Zeladorias
     let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
     if (!userProfile.is_admin && userProfile.escola_id) queryZel = queryZel.eq('escola_id', userProfile.escola_id);
     const { data: dataZel } = await queryZel;
@@ -105,6 +108,7 @@ export default function Dashboard() {
         setAlertasVencimento(alertas);
     }
 
+    // 3. Água
     const now = new Date(); const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString(); const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
     let queryWater = supabase.from('consumo_agua').select('consumo_dia, excedeu_limite').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
     if (!userProfile.is_admin && userProfile.escola_id) queryWater = queryWater.eq('escola_id', userProfile.escola_id);
@@ -114,6 +118,7 @@ export default function Dashboard() {
         const totalJustificativas = waterData.filter(r => r.excedeu_limite).length; setJustificativasMes(totalJustificativas);
     }
 
+    // 4. Fiscalização
     let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido, escolas(nome)');
     if (!userProfile.is_admin && userProfile.escola_id) queryInsp = queryInsp.eq('escola_id', userProfile.escola_id);
     const { data: inspData } = await queryInsp;
@@ -130,14 +135,32 @@ export default function Dashboard() {
         setRankingPendencias(rankingArray);
     }
 
+    // 5. Usuários
     let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
     if (!userProfile.is_admin && userProfile.escola_id) queryUser = queryUser.eq('escola_id', userProfile.escola_id);
     const { data: dataUser } = await queryUser; if (dataUser) setUsuarios(dataUser);
+
+    // 6. Notificações do Sistema (Sino)
+    // Busca apenas as do usuário logado (devido RLS, mas garantimos aqui pelo filtro)
+    // Limitamos a 20 para não pesar
+    const { data: notifs } = await supabase
+        .from('notificacoes_sistema')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+    
+    if (notifs) setNotificacoesSistema(notifs);
   };
 
   const loadEscolas = async () => { const { data } = await supabase.from('escolas').select('id, nome'); if (data) setEscolas(data); };
 
-  // --- LÓGICA DO MÓDULO DE ENERGIA ---
+  // --- AÇÕES DO SISTEMA ---
+
+  const handleMarkAsRead = async (id: string) => {
+    await marcarNotificacaoLida(id);
+    setNotificacoesSistema(prev => prev.map(n => n.id === id ? { ...n, lida: true } : n));
+  };
+
   const openEnergyWizard = () => {
     setEnergyStep(1);
     setEnergyData({ abrangencia: '', descricao: '' });
@@ -145,7 +168,6 @@ export default function Dashboard() {
   };
 
   const handleEnergyAction = async (action: 'next' | 'cancel' | 'finish', payload?: any) => {
-    // 1. Cancelamento
     if (action === 'cancel') {
         if (confirm("Ótima notícia! Confirmar que a energia voltou e cancelar o chamado?")) {
             setLoadingAction(true);
@@ -163,7 +185,6 @@ export default function Dashboard() {
         return;
     }
 
-    // 2. Navegação
     if (action === 'next') {
         if (energyStep === 1) {
             setEnergyData(prev => ({ ...prev, abrangencia: payload }));
@@ -175,7 +196,6 @@ export default function Dashboard() {
         }
     }
 
-    // 3. Finalização e Envio WhatsApp
     if (action === 'finish') {
         if (!energyData.descricao) { alert("Por favor, descreva o problema."); return; }
         
@@ -195,11 +215,10 @@ export default function Dashboard() {
         } else {
             setShowEnergyModal(false);
             
-            // --- CORREÇÃO AQUI (Guard Clause) ---
             const info = res.dados_mensagem;
-            if (!info) return; // Se info for undefined, para a execução e evita o erro.
+            if (!info) return;
 
-            const numeroCentral = "551124422286"; // <--- SEU NÚMERO AQUI
+            const numeroCentral = "5511999999999"; // ALTERAR PARA O NÚMERO CORRETO
             
             const textoMensagem = 
 `*🚨 ALERTA: Queda de Energia - SGE*
@@ -224,31 +243,68 @@ _Gerado pelo SGE_`;
     }
   };
 
-  // Funções Existentes
   const handleExportDashboard = () => {
     const doc = new jsPDF();
     const date = new Date().toLocaleDateString('pt-BR');
+    
     doc.setFillColor(37, 99, 235); doc.rect(0, 0, 210, 40, 'F');
-    doc.setTextColor(255, 255, 255); doc.setFontSize(18); doc.text("SGE-GSU | Relatório Gerencial", 14, 20);
-    doc.setFontSize(10); doc.text(`Gerado em: ${date}`, 14, 30);
-    doc.setTextColor(0, 0, 0); doc.setFontSize(14); doc.text("1. KPIs Gerais", 14, 55);
-    doc.setFontSize(11);
-    const kpis = [`Total Zeladorias: ${stats.total}`, `Consumo Médio Água: ${waterAvg.toFixed(1)} m³/dia`, `Justificativas Água: ${justificativasMes}`, `Taxa Fiscalização: ${inspectionRate}%`];
-    let y = 65; kpis.forEach(k => { doc.text(`• ${k}`, 14, y); y += 7; });
+    doc.setTextColor(255, 255, 255); 
+    doc.setFontSize(18); doc.setFont("helvetica", "bold"); doc.text("SGE-GSU | Relatório Gerencial", 14, 20);
+    doc.setFontSize(10); doc.setFont("helvetica", "normal"); doc.text(`Gerado em: ${date}`, 14, 30);
+
+    doc.setTextColor(0, 0, 0);
+    let y = 55;
+
+    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("1. KPIs Gerais", 14, y);
+    y += 10;
+    doc.setFontSize(11); doc.setFont("helvetica", "normal");
+    
+    const kpis = [
+        `Total Zeladorias: ${stats.total}`,
+        `Consumo Médio Água: ${waterAvg.toFixed(1)} m³/dia`,
+        `Justificativas de Água (Mês): ${justificativasMes}`,
+        `Taxa Resposta Fiscalização: ${inspectionRate}%`
+    ];
+    kpis.forEach(k => { doc.text(`• ${k}`, 14, y); y += 7; });
+
+    y += 10;
+    
+    if (rankingPendencias.length > 0) {
+        doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.text("2. Ranking de Pendências (Top 5)", 14, y);
+        y += 10;
+        doc.setFontSize(11); doc.setFont("helvetica", "normal");
+        rankingPendencias.forEach((r, i) => {
+            doc.text(`${i+1}. ${r.nome}: ${r.qtd} pendências`, 14, y);
+            y += 7;
+        });
+    }
+
     doc.save(`dashboard_${date.replace(/\//g, '-')}.pdf`);
   };
 
   const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault(); setLoadingAction(true);
-    let res; if (modalType === 'create') res = await createNewUser(formData); if (modalType === 'edit') res = await updateSystemUser(formData.id, formData); if (modalType === 'reset') res = await resetUserPassword(formData.id, formData.senha);
-    if (res?.error) alert(res.error); else { alert('Sucesso!'); setModalType(null); resetForm(); loadDashboardData(usuarioLogado); } setLoadingAction(false);
+    e.preventDefault();
+    setLoadingAction(true);
+    let res;
+    if (modalType === 'create') res = await createNewUser(formData);
+    if (modalType === 'edit') res = await updateSystemUser(formData.id, formData);
+    if (modalType === 'reset') res = await resetUserPassword(formData.id, formData.senha);
+    if (res?.error) alert(res.error);
+    else { alert('Sucesso!'); setModalType(null); resetForm(); loadDashboardData(usuarioLogado); }
+    setLoadingAction(false);
   };
-  const handleDelete = async (userId: string, name: string) => { if (confirm(`Remover ${name}?`)) { await deleteSystemUser(userId); loadDashboardData(usuarioLogado); } };
+
+  const handleDelete = async (userId: string, name: string) => {
+    if (confirm(`Remover ${name}?`)) { await deleteSystemUser(userId); loadDashboardData(usuarioLogado); }
+  };
+  
   const resetForm = () => setFormData({ id: '', nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
   const openEdit = (user: any) => { setFormData({ id: user.id, nome: user.nome, email: user.email, senha: '', perfil: user.perfil, escola_id: user.escola_id || '' }); setModalType('edit'); };
   const openReset = (user: any) => { setFormData({ ...formData, id: user.id, nome: user.nome, senha: '' }); setModalType('reset'); };
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
+
+  const naoLidas = notificacoesSistema.filter(n => !n.lida).length;
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
@@ -270,7 +326,52 @@ _Gerado pelo SGE_`;
             <h1 className="text-3xl font-black tracking-tight">Painel de Controle</h1>
             <p className="text-slate-500 font-medium">Bem-vindo, <span className="text-blue-600 font-bold">{usuarioLogado?.nome || usuarioLogado?.email}</span></p>
           </div>
-          <div className="flex gap-2">
+          
+          <div className="flex gap-4 items-center">
+             
+             {/* --- ÍCONE DE NOTIFICAÇÕES (SINO) --- */}
+             <div className="relative">
+                <button 
+                    onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                    className="p-3 bg-white rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 relative transition-colors"
+                >
+                    <BellRing size={20} />
+                    {naoLidas > 0 && (
+                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full animate-bounce shadow-sm">
+                            {naoLidas}
+                        </span>
+                    )}
+                </button>
+
+                {showNotifDropdown && (
+                    <div className="absolute right-0 top-14 w-80 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between items-center">
+                            <span className="font-bold text-sm text-slate-700">Notificações</span>
+                            <span className="text-xs text-slate-400">{naoLidas} novas</span>
+                        </div>
+                        <div className="max-h-64 overflow-y-auto">
+                            {notificacoesSistema.length === 0 && <div className="p-6 text-center text-xs text-slate-400 italic">Nenhuma notificação no momento.</div>}
+                            
+                            {notificacoesSistema.map(notif => (
+                                <div key={notif.id} className={`p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors ${notif.lida ? 'opacity-60' : 'bg-blue-50/30 border-l-4 border-l-blue-500'}`}>
+                                    <div className="flex justify-between items-start mb-1">
+                                        <h4 className="font-bold text-xs text-slate-800 line-clamp-1">{notif.titulo}</h4>
+                                        {!notif.lida && (
+                                            <button onClick={() => handleMarkAsRead(notif.id)} className="text-blue-500 hover:text-blue-700 p-1 hover:bg-blue-100 rounded" title="Marcar como lida">
+                                                <Check size={14}/>
+                                            </button>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-slate-500 leading-relaxed mb-2 line-clamp-2">{notif.mensagem}</p>
+                                    <span className="text-[10px] text-slate-300 block text-right">{new Date(notif.created_at).toLocaleString('pt-BR')}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+             </div>
+
+            {/* BOTÃO ENERGIA (ESCOLAS) */}
             {!usuarioLogado?.is_admin && (
                 <button onClick={openEnergyWizard} className="bg-yellow-400 hover:bg-yellow-500 text-yellow-900 px-4 py-3 rounded-xl font-bold flex gap-2 shadow-lg shadow-yellow-400/20 transition-transform hover:scale-105 animate-pulse">
                     <Zap size={20} fill="currentColor"/> Relatar Queda de Energia
@@ -284,7 +385,10 @@ _Gerado pelo SGE_`;
 
         {notificacoesPendentes.length > 0 && (
              <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
-                <div><h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Pendência de Fiscalização</h3><p className="text-red-600 mt-1 font-medium">Você possui questionários não respondidos.</p></div>
+                <div>
+                    <h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Pendência de Fiscalização</h3>
+                    <p className="text-red-600 mt-1 font-medium">Você possui questionários não respondidos.</p>
+                </div>
                 <Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg">Resolver</Link>
              </div>
         )}
