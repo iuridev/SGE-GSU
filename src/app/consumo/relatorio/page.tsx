@@ -5,8 +5,8 @@ import {
   ArrowLeft, FileDown, Search, Droplets, Calendar, Filter, Loader2, AlertTriangle, Building2
 } from 'lucide-react';
 import Link from 'next/link';
-import { getRelatorioConsumoGeral } from '@/app/actions'; //
-import { supabase } from '@/app/lib/supabase'; //
+import { getRelatorioConsumoGeral } from '@/app/actions'; 
+import { supabase } from '@/app/lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -33,12 +33,10 @@ export default function RelatorioAguaPage() {
     escolaId: '' // Usado apenas pelo Regional
   });
 
-  // 1. Inicialização
   useEffect(() => {
     init();
   }, []);
 
-  // 2. Reaplica filtros locais quando muda a seleção de escola (apenas visual)
   useEffect(() => {
     filtrarDadosLocais();
   }, [filtro.escolaId, registros]);
@@ -46,32 +44,25 @@ export default function RelatorioAguaPage() {
   const init = async () => {
     setLoading(true);
     
-    // A. Identificar quem é o usuário
     const { data: { user } } = await supabase.auth.getUser();
     
     if (user) {
-        // Busca o perfil na tabela usuarios
         const { data: profile } = await supabase
             .from('usuarios')
             .select('perfil')
-            .eq('id', user.id) // Busca pelo ID vinculado ao Auth
+            .eq('id', user.id)
             .single();
         
         const ehRegional = profile?.perfil === 'Regional';
         setIsAdmin(ehRegional);
 
-        // B. Se for Regional, carrega a lista de escolas para o dropdown
         if (ehRegional) {
             const { data: escolas } = await supabase.from('escolas').select('id, nome').order('nome');
             setListaEscolas(escolas || []);
         }
     }
 
-    // C. Buscar Relatório
-    // O RLS do banco de dados vai decidir o que volta aqui.
-    // Se for Regional, volta TUDO. Se for Operacional, volta SÓ A ESCOLA DELE.
     await buscarDadosServidor();
-    
     setLoading(false);
   };
 
@@ -90,14 +81,12 @@ export default function RelatorioAguaPage() {
   const filtrarDadosLocais = () => {
     let dados = [...registros];
 
-    // Se for Admin e escolheu uma escola específica no dropdown
     if (isAdmin && filtro.escolaId) {
         dados = dados.filter(r => r.escola_id === filtro.escolaId);
     }
 
     setRegistrosFiltrados(dados);
 
-    // Calcular Média da visualização atual
     if (dados.length > 0) {
         const total = dados.reduce((acc: number, r: any) => acc + (Number(r.consumo_dia) || 0), 0);
         setMediaGeral(total / dados.length);
@@ -109,8 +98,7 @@ export default function RelatorioAguaPage() {
   const gerarPDF = () => {
     const doc = new jsPDF();
     
-    // Cabeçalho PDF
-    doc.setFillColor(6, 182, 212); // Ciano
+    doc.setFillColor(6, 182, 212);
     doc.rect(0, 0, 210, 40, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(22);
@@ -118,7 +106,6 @@ export default function RelatorioAguaPage() {
     doc.setFontSize(10);
     doc.text(`Período: ${new Date(filtro.inicio).toLocaleDateString()} a ${new Date(filtro.fim).toLocaleDateString()}`, 14, 35);
 
-    // Corpo PDF
     const tableData = registrosFiltrados.map(r => [
         new Date(r.data_leitura).toLocaleDateString('pt-BR', {timeZone: 'UTC'}),
         r.escolas?.nome || 'Indefinida',
@@ -137,7 +124,6 @@ export default function RelatorioAguaPage() {
         headStyles: { fillColor: [6, 182, 212] },
         styles: { fontSize: 8 },
         didParseCell: function(data) {
-            // Destaca alertas em vermelho
             if (data.section === 'body' && data.column.index === 5 && data.cell.raw === 'SIM') {
                 data.cell.styles.textColor = [220, 38, 38];
                 data.cell.styles.fontStyle = 'bold';
@@ -169,12 +155,12 @@ export default function RelatorioAguaPage() {
         </div>
       </div>
 
-      {/* --- FILTROS --- */}
+      {/* --- FILTROS (LAYOUT FLEX CORRIGIDO) --- */}
       <div className="max-w-6xl mx-auto bg-white p-6 rounded-3xl shadow-sm border border-slate-100 mb-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="flex flex-col md:flex-row gap-4 items-end">
             
             {/* Data Início */}
-            <div>
+            <div className="w-full md:flex-1">
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Data Início</label>
                 <div className="flex items-center gap-2 bg-slate-50 border p-3 rounded-xl focus-within:ring-2 ring-cyan-100 transition-all">
                     <Calendar size={18} className="text-slate-400"/>
@@ -183,7 +169,7 @@ export default function RelatorioAguaPage() {
             </div>
 
             {/* Data Fim */}
-            <div>
+            <div className="w-full md:flex-1">
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Data Fim</label>
                 <div className="flex items-center gap-2 bg-slate-50 border p-3 rounded-xl focus-within:ring-2 ring-cyan-100 transition-all">
                     <Calendar size={18} className="text-slate-400"/>
@@ -192,8 +178,8 @@ export default function RelatorioAguaPage() {
             </div>
 
             {/* Filtro de Escola (APARECE APENAS SE FOR ADMIN REGIONAL) */}
-            {isAdmin ? (
-                <div>
+            {isAdmin && (
+                <div className="w-full md:flex-1">
                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Filtrar Escola</label>
                     <div className="flex items-center gap-2 bg-slate-50 border p-3 rounded-xl focus-within:ring-2 ring-cyan-100 transition-all">
                         <Building2 size={18} className="text-slate-400"/>
@@ -209,17 +195,15 @@ export default function RelatorioAguaPage() {
                         </select>
                     </div>
                 </div>
-            ) : (
-                <div className="hidden md:block"></div> // Espaçador para layout
             )}
 
-            {/* Botões */}
-            <div className="flex gap-2">
-                <button onClick={buscarDadosServidor} disabled={loading} className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-lg shadow-cyan-200">
-                    {loading ? <Loader2 className="animate-spin"/> : <Search size={20}/>} <span className="hidden lg:inline">Buscar</span>
+            {/* Botões (SEMPRE VISÍVEIS) */}
+            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
+                <button onClick={buscarDadosServidor} disabled={loading} className="flex-1 md:flex-none bg-cyan-600 hover:bg-cyan-700 text-white px-6 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-lg shadow-cyan-200 whitespace-nowrap">
+                    {loading ? <Loader2 className="animate-spin"/> : <Search size={20}/>} Buscar
                 </button>
-                <button onClick={gerarPDF} disabled={registrosFiltrados.length === 0} className="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all disabled:opacity-50">
-                    <FileDown size={20}/> <span className="hidden lg:inline">PDF</span>
+                <button onClick={gerarPDF} disabled={registrosFiltrados.length === 0} className="flex-1 md:flex-none bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex justify-center items-center gap-2 transition-all disabled:opacity-50 whitespace-nowrap">
+                    <FileDown size={20}/> PDF
                 </button>
             </div>
         </div>
