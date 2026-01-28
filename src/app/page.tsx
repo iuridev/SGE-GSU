@@ -8,7 +8,7 @@ import {
   FileWarning, ListX, Zap, ChevronRight, Lightbulb, Power, BellRing, Check 
 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia, marcarNotificacaoLida, getDadosDashboard } from './actions';
+import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia, marcarNotificacaoLida, getDadosDashboard } from './actions'; //
 import Link from 'next/link';
 import jsPDF from 'jspdf';
 
@@ -306,12 +306,10 @@ _Gerado pelo SGE_`;
           <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
           <Link href="/consumo" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Droplets size={20} /> <span>Hidrômetro</span></Link>
           
-          {/* BOTÃO RELATÓRIO GERAL (NOVO - Só Admin) */}
-          {usuarioLogado?.is_admin && (
-              <Link href="/consumo/relatorio" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all ml-4 border-l-2 border-slate-700">
-                  <FileDown size={18} /> <span>Relatório Água</span>
-              </Link>
-          )}
+          {/* BOTÃO RELATÓRIO GERAL (Agora visível para TODOS) */}
+          <Link href="/consumo/relatorio" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all ml-4 border-l-2 border-slate-700">
+              <FileDown size={18} /> <span>Relatório Água</span>
+          </Link>
 
           {/* BOTÃO FISCALIZAÇÃO */}
           <Link href="/fiscalizacoes" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><ClipboardList size={20} /> <span>Fiscalização</span></Link>
