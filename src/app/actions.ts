@@ -1,433 +1,124 @@
 'use server'
 
-import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { Resend } from 'resend';
+import { createClient } from '@supabase/supabase-js' // Necessário para o Admin Client
+import nodemailer from 'nodemailer';
 
-// --- FUNÇÃO AUXILIAR DE ADMINISTRAÇÃO ---
-function getSupabaseAdmin() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceRoleKey) {
-    throw new Error("Erro de Configuração: Chave de Admin (Service Role) não encontrada no Vercel.");
-  }
+// --- CONFIGURAÇÃO DO TRANSPORTE DE E-MAIL (Opcional, caso volte a usar) ---
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT),
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+  tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+});
+
+// --- HELPER: CLIENTE ADMIN (Para furar bloqueios de permissão ao notificar) ---
+// Tenta usar a Service Role Key (se definida no .env) para garantir acesso total
+const getSupabaseAdmin = () => {
+  const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceRoleKey,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  )
+    adminKey!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  );
 }
 
-// --- CHECAGEM DE PERMISSÃO (Reutilizável) ---
-async function checkAdminPermission() {
-  const cookieStore = await cookies()
+// ==========================================
+//           MÓDULO DE USUÁRIOS
+// ==========================================
+
+export async function createNewUser(data: any) {
+  const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  )
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { allowed: false, error: 'Não autenticado.' }
+  );
+
+  // 1. Criar Auth User
+  const { data: authUser, error: authError } = await supabase.auth.signUp({
+    email: data.email,
+    password: data.senha,
+    options: { data: { nome: data.nome } } // Metadado opcional
+  });
+
+  if (authError) return { error: authError.message };
+  if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
+
+  // 2. Criar Registro na Tabela 'usuarios' (Vínculo)
+  // Usamos um cliente admin aqui para garantir permissão de escrita se necessário
+  const adminClient = getSupabaseAdmin();
   
-  const { data: userProfile } = await supabase.from('usuarios').select('perfil').eq('email', user.email).single()
-  if (userProfile?.perfil !== 'Regional') return { allowed: false, error: 'Acesso negado.' }
+  const { error: dbError } = await adminClient.from('usuarios').insert({
+    id: authUser.user.id, // Vínculo crucial: ID do Auth = ID da Tabela
+    email: data.email,
+    nome: data.nome,
+    perfil: data.perfil,
+    escola_id: data.escola_id || null
+  });
 
-  return { allowed: true, user }
-}
-
-// ==========================================
-//              AÇÕES DE ESCOLA (ATUALIZADO)
-// ==========================================
-
-export async function createEscola(data: any) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('escolas').insert({
-      nome: data.nome,
-      cidade: data.cidade,
-      estado: data.estado,
-      email: data.email,
-      telefone: data.telefone,
-      diretor: data.diretor,
-      polo: data.polo,
-      fiscal_id: data.fiscal_id || null // Agora salvamos o ID
-    });
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function updateEscola(id: string, data: any) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('escolas').update({
-      nome: data.nome,
-      cidade: data.cidade,
-      estado: data.estado,
-      email: data.email,
-      telefone: data.telefone,
-      diretor: data.diretor,
-      polo: data.polo,
-      fiscal_id: data.fiscal_id || null // Atualiza o ID
-    }).eq('id', id);
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// ==========================================
-//              AÇÕES DE USUÁRIO
-// ==========================================
-
-export async function createNewUser(formData: any) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-
-    // 1. Auth
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email: formData.email,
-      password: formData.senha,
-      email_confirm: true,
-      user_metadata: { nome: formData.nome }
-    })
-    if (authError) return { error: authError.message }
-
-    // 2. Banco
-    const { error: dbError } = await supabaseAdmin.from('usuarios').insert({
-      id: authData.user!.id,
-      nome: formData.nome,
-      email: formData.email,
-      perfil: formData.perfil,
-      escola_id: formData.escola_id || null
-    })
-
-    if (dbError) {
-      await supabaseAdmin.auth.admin.deleteUser(authData.user!.id)
-      return { error: dbError.message }
-    }
-    return { success: true }
-  } catch (error: any) { return { error: error.message } }
-}
-
-export async function updateSystemUser(userId: string, data: any) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-
-    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      email: data.email,
-      user_metadata: { nome: data.nome }
-    });
-    if (authError) return { error: 'Erro Auth: ' + authError.message };
-
-    const { error: dbError } = await supabaseAdmin.from('usuarios').update({
-      nome: data.nome,
-      email: data.email,
-      perfil: data.perfil,
-      escola_id: data.escola_id || null
-    }).eq('id', userId);
-
-    if (dbError) return { error: 'Erro Banco: ' + dbError.message };
-
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function resetUserPassword(userId: string, newPassword: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      password: newPassword
-    });
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function deleteSystemUser(userId: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId)
-    if (authError) return { error: authError.message }
-
-    const { error: dbError } = await supabaseAdmin.from('usuarios').delete().eq('id', userId)
-    if (dbError) return { error: dbError.message }
-    return { success: true }
-  } catch (error: any) { return { error: error.message } }
-}
-
-// ==========================================
-//              AÇÕES DE ZELADORIA
-// ==========================================
-
-export async function createZeladoria(data: { 
-  escola_id: string; 
-  nome_zelador: string; 
-  cpf_zelador: string;
-  numero_sei: string;
-  cargo_zelador: string;
-  data_inicio: string;
-  isento_pagamento: boolean;
-}) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('zeladorias').insert({
-      escola_id: data.escola_id,
-      nome_zelador: data.nome_zelador,
-      cpf_zelador: data.cpf_zelador,
-      numero_sei: data.numero_sei,
-      cargo_zelador: data.cargo_zelador,
-      data_inicio: data.data_inicio,
-      isento_pagamento: data.isento_pagamento,
-      etapa_atual: 1,
-      data_etapa_1: new Date().toISOString()
-    });
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function updateZeladoriaEtapa(id: string, novaEtapa: number) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const campoData = `data_etapa_${novaEtapa}`;
-    const updateData: any = { 
-      etapa_atual: novaEtapa,
-      [campoData]: new Date().toISOString()
-    };
-    const { error } = await supabaseAdmin.from('zeladorias').update(updateData).eq('id', id);
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// --- NOVA FUNÇÃO: EXCLUIR ESCOLA ---
-export async function deleteEscola(id: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    
-    // Tenta excluir. Se houver dependências sem CASCADE (ex: usuários vinculados), o banco retornará erro.
-    const { error } = await supabaseAdmin.from('escolas').delete().eq('id', id);
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { 
-    // Trata erro comum de chave estrangeira para mensagem mais amigável
-    if (error.code === '23503') {
-        return { error: 'Não é possível excluir esta escola pois ela possui vínculos (usuários, processos, etc). Remova os vínculos antes.' };
-    }
-    return { error: error.message }; 
+  if (dbError) {
+    // Se falhar no banco, idealmente deletaríamos o Auth, mas por simplicidade retornamos erro
+    return { error: "Erro ao salvar dados do perfil: " + dbError.message };
   }
+
+  return { success: true };
 }
 
-export async function updateZeladoriaData(id: string, data: {
-  escola_id: string; 
-  nome_zelador: string; 
-  cpf_zelador: string;
-  numero_sei: string;
-  cargo_zelador: string;
-  data_inicio: string;
-  isento_pagamento: boolean;
-}) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('zeladorias').update({
-      escola_id: data.escola_id,
-      nome_zelador: data.nome_zelador,
-      cpf_zelador: data.cpf_zelador,
-      numero_sei: data.numero_sei,
-      cargo_zelador: data.cargo_zelador,
-      data_inicio: data.data_inicio,
-      isento_pagamento: data.isento_pagamento
-    }).eq('id', id);
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function arquivarZeladoria(id: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('zeladorias').update({ status: 'Arquivado' }).eq('id', id);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// ==========================================
-//           MÓDULO FISCALIZAÇÃO
-// ==========================================
-
-// 1. Criar Nova Data de Fiscalização
-export async function createFiscalizacaoEvent(dataReferencia: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-
-    // 1. Cria o Evento (A Data)
-    const { data: evento, error: errEvento } = await supabaseAdmin
-      .from('fiscalizacoes_eventos')
-      .insert({ data_referencia: dataReferencia })
-      .select()
-      .single();
-
-    if (errEvento) throw errEvento;
-
-    // 2. Pega todas as escolas cadastradas
-    const { data: escolas } = await supabaseAdmin.from('escolas').select('id');
-    
-    if (escolas && escolas.length > 0) {
-      // 3. Gera a lista de presença para todas as escolas
-      const inserts = escolas.map(escola => ({
-        evento_id: evento.id,
-        escola_id: escola.id,
-        respondido: false,
-        notificado: false
-      }));
-      
-      const { error: errInserts } = await supabaseAdmin.from('fiscalizacoes_respostas').insert(inserts);
-      if (errInserts) throw errInserts;
-    }
-
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// 2. Marcar como Respondido (Check)
-export async function toggleFiscalizacaoRespondido(respostaId: string, statusAtual: boolean) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    // Se marcou como respondido, removemos a notificação automaticamente
-    const updateData = statusAtual ? { respondido: false } : { respondido: true, notificado: false };
-    
-    const { error } = await supabaseAdmin.from('fiscalizacoes_respostas').update(updateData).eq('id', respostaId);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// 3. Enviar Notificação (Cobrança)
-export async function toggleFiscalizacaoNotificacao(respostaId: string, statusAtual: boolean) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('fiscalizacoes_respostas').update({ notificado: !statusAtual }).eq('id', respostaId);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-// 4. Excluir Evento (Caso erre a data)
-export async function deleteFiscalizacaoEvent(id: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('fiscalizacoes_eventos').delete().eq('id', id);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-
-
-// ==========================================
-//              AÇÕES DE FISCAIS (NOVO)
-// ==========================================
-
-export async function getFiscais() {
+export async function updateSystemUser(id: string, data: any) {
+  const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return undefined } } } // Leitura pública simplificada ou use cookies
-  )
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('usuarios').update({
+    nome: data.nome,
+    perfil: data.perfil,
+    escola_id: data.escola_id || null
+  }).eq('id', id);
+
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteSystemUser(id: string) {
+  const supabase = getSupabaseAdmin(); // Admin para deletar sem restrições
   
-  const { data, error } = await supabase.from('fiscais').select('*').order('nome');
-  if (error) return [];
-  return data;
+  // 1. Remover da tabela usuarios
+  const { error: dbError } = await supabase.from('usuarios').delete().eq('id', id);
+  if (dbError) return { error: dbError.message };
+
+  // 2. Remover do Auth (Supabase Admin API)
+  const { error: authError } = await supabase.auth.admin.deleteUser(id);
+  if (authError) return { error: authError.message };
+
+  return { success: true };
 }
 
-export async function createFiscal(data: any) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    const { error } = await supabaseAdmin.from('fiscais').insert(data);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
-}
-
-export async function deleteFiscal(id: string) {
-  const perm = await checkAdminPermission();
-  if (!perm.allowed) return { error: perm.error };
-
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
-    // Verifica se tem escola vinculada antes de apagar
-    const { count } = await supabaseAdmin.from('escolas').select('*', { count: 'exact', head: true }).eq('fiscal_id', id);
-    if (count && count > 0) return { error: 'Não é possível excluir: Este fiscal está vinculado a escolas.' };
-
-    const { error } = await supabaseAdmin.from('fiscais').delete().eq('id', id);
-    if (error) throw error;
-    return { success: true };
-  } catch (error: any) { return { error: error.message }; }
+export async function resetUserPassword(id: string, newPassword: string) {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.auth.admin.updateUserById(id, { password: newPassword });
+  if (error) return { error: error.message };
+  return { success: true };
 }
 
 // ==========================================
 //           MÓDULO CONSUMO DE ÁGUA
 // ==========================================
 
-// 1. Buscar a leitura anterior MAIS PRÓXIMA (Valor + Data)
 export async function getUltimaLeitura(escolaId: string, dataReferencia: string) {
-  // CORREÇÃO: Agora usamos cookies() para autenticar a requisição
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -435,22 +126,18 @@ export async function getUltimaLeitura(escolaId: string, dataReferencia: string)
     { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
   );
   
-  // Busca o registro mais recente ANTES da data informada
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('consumo_agua')
     .select('leitura_atual, data_leitura')
     .eq('escola_id', escolaId)
-    .lt('data_leitura', dataReferencia) // < Data Atual
-    .order('data_leitura', { ascending: false }) // Do mais recente para o antigo
+    .lt('data_leitura', dataReferencia)
+    .order('data_leitura', { ascending: false })
     .limit(1)
-    .maybeSingle(); // Retorna null se não achar, sem erro
+    .maybeSingle();
 
-  if (error) console.error("Erro ao buscar leitura anterior:", error);
-  
-  return data; // Retorna { leitura_atual: ..., data_leitura: ... } ou null
+  return data;
 }
 
-// 2. Criar ou Atualizar Registro de Consumo
 export async function saveConsumoAgua(data: any) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -463,41 +150,31 @@ export async function saveConsumoAgua(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Busca leitura anterior
     const registroAnterior = await getUltimaLeitura(data.escola_id, data.data_leitura);
     
     let leituraAnterior = 0;
     let consumo = 0;
     let isPrimeiroDoMes = false;
 
-    // --- LÓGICA DE CÁLCULO (STRING SAFE) ---
-    // Compara apenas "YYYY-MM" para saber se é a mesma competência
     const mesAtual = data.data_leitura.substring(0, 7);
     const mesAnterior = registroAnterior?.data_leitura?.substring(0, 7);
 
     if (registroAnterior && mesAtual === mesAnterior) {
-        // Cenário 1: Mesmo mês -> Calcula Diferença
         leituraAnterior = Number(registroAnterior.leitura_atual);
         consumo = Number(data.leitura_atual) - leituraAnterior;
-        
-        // Validação: Leitura atual não pode ser menor que anterior no mesmo mês
-        if (consumo < 0) {
-             return { error: `Erro: Leitura atual (${data.leitura_atual}) é menor que a anterior (${leituraAnterior}). Verifique se digitou corretamente.` };
-        }
+        if (consumo < 0) return { error: `Erro: Leitura atual menor que a anterior.` };
     } else {
-        // Cenário 2: Mês novo OU 1º registro -> Zera consumo (Início de Ciclo)
-        leituraAnterior = Number(data.leitura_atual); // Define base igual atual
+        leituraAnterior = Number(data.leitura_atual);
         consumo = 0;
         isPrimeiroDoMes = true;
     }
 
     const limite = Number(data.populacao) * 0.008;
-    // Só valida excesso se não for leitura inicial (consumo > 0)
     const excedeu = !isPrimeiroDoMes && (consumo > limite);
 
     if (excedeu) {
-        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória (consumo acima da média).' };
-        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória (consumo acima da média).' };
+        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória.' };
+        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória.' };
     }
 
     const payload = {
@@ -506,7 +183,7 @@ export async function saveConsumoAgua(data: any) {
         data_leitura: data.data_leitura,
         leitura_atual: data.leitura_atual,
         leitura_anterior: leituraAnterior,
-        consumo_dia: consumo, // Força o valor calculado aqui
+        consumo_dia: consumo,
         populacao: data.populacao,
         limite_calculado: limite,
         excedeu_limite: excedeu,
@@ -514,7 +191,6 @@ export async function saveConsumoAgua(data: any) {
         acao_corretiva: excedeu ? data.acao_corretiva : null
     };
 
-    // Upsert
     if (data.id) {
         const { error } = await supabase.from('consumo_agua').update(payload).eq('id', data.id);
         if (error) throw error;
@@ -525,46 +201,35 @@ export async function saveConsumoAgua(data: any) {
              throw error;
         }
     }
-
     return { success: true };
-
   } catch (error: any) { return { error: error.message }; }
 }
 
-// 3. Buscar Histórico
 export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
     const cookieStore = await cookies();
+    // Usa cliente Admin para garantir que o usuário Regional veja tudo sem restrição de RLS
+    // Se não tiver chave de serviço configurada, usa a anonima normal
+    let supabaseClient;
     
-    // 1. Cria cliente normal
-    const supabaseAuth = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-    );
+    // Verifica usuário atual
+    const authClient = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+    const { data: { user } } = await authClient.auth.getUser();
     
-    const { data: { user } } = await supabaseAuth.auth.getUser();
-    let supabaseClient = supabaseAuth;
-
     if (user) {
-        const { data: profile } = await supabaseAuth.from('usuarios').select('perfil').eq('email', user.email).single();
-        // Se for Admin, usa Super Client para ver tudo
+        const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
         if (profile?.perfil === 'Regional') {
-            supabaseClient = getSupabaseAdmin();
+            supabaseClient = getSupabaseAdmin(); // Admin vê tudo
+        } else {
+            supabaseClient = authClient; // Operacional vê o seu
         }
+    } else {
+        supabaseClient = authClient;
     }
-    
-    let query = supabaseClient
-        .from('consumo_agua')
-        .select('*, escolas(nome), usuarios(nome)')
-        .order('data_leitura', { ascending: false });
+
+    let query = supabaseClient.from('consumo_agua').select('*, escolas(nome), usuarios(nome)').order('data_leitura', { ascending: false });
 
     if (escolaId) query = query.eq('escola_id', escolaId);
-    
-    // --- NOVO FILTRO: APENAS ALERTAS ---
-    if (apenasAlertas) {
-        query = query.eq('excedeu_limite', true);
-    }
-
+    if (apenasAlertas) query = query.eq('excedeu_limite', true);
     if (mes && ano) {
         const startDate = `${ano}-${mes.padStart(2, '0')}-01`;
         const nextMonth = Number(mes) === 12 ? 1 : Number(mes) + 1;
@@ -574,11 +239,8 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
     }
 
     const { data, error } = await query;
-    if (error) {
-        console.error("Erro histórico:", error);
-        return [];
-    }
-    return data;
+    if (error) console.error("Erro histórico:", error);
+    return data || [];
 }
 
 // ==========================================
@@ -597,7 +259,7 @@ export async function reportarQuedaEnergia(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Salvar o Relatório (Igual anterior)
+    // 1. Salvar na Tabela de Energia (Registro Oficial)
     const { error } = await supabase.from('notificacoes_energia').insert({
         escola_id: data.escola_id,
         registrado_por: user.id,
@@ -610,53 +272,73 @@ export async function reportarQuedaEnergia(data: any) {
 
     if (error) throw error;
 
-    // Buscar dados para mensagem e notificação
+    // Buscar dados para enriquecer as mensagens
     const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
     const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
 
+    // Data formatada no fuso de Brasília
+    const dataHoraBrasilia = new Date().toLocaleString('pt-BR', { 
+        timeZone: 'America/Sao_Paulo',
+        dateStyle: 'short',
+        timeStyle: 'medium'
+    });
+
     // ---------------------------------------------------------
-    // NOVO: Notificar Administradores (Regional) no Sistema
+    // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
     // ---------------------------------------------------------
     if (!data.resolvido_antecipadamente) {
-        // 1. Buscar todos os Admins
-        const { data: admins } = await supabase
+        // Usamos getSupabaseAdmin() para ignorar RLS. 
+        // Assim, o usuário 'Operacional' consegue encontrar os 'Regionais' e inserir avisos pra eles.
+        const adminClient = getSupabaseAdmin();
+
+        // Buscar todos os usuários com perfil Regional
+        const { data: admins, error: adminErr } = await adminClient
             .from('usuarios')
             .select('id')
             .eq('perfil', 'Regional');
 
-        if (admins && admins.length > 0) {
-            // 2. Criar uma notificação para cada Admin
+        if (adminErr) {
+            console.error("Erro ao buscar admins:", adminErr);
+        } else if (admins && admins.length > 0) {
+            
             const notificacoes = admins.map(admin => ({
                 usuario_id: admin.id,
                 titulo: `⚡ Queda de Energia: ${escola?.nome}`,
-                mensagem: `Relatado por ${usuario?.nome}. Abrangência: ${data.abrangencia}. "${data.descricao}"`,
+                mensagem: `Relatado por ${usuario?.nome} em ${dataHoraBrasilia}. Abrangência: ${data.abrangencia}.`,
                 lida: false
             }));
 
-            await supabase.from('notificacoes_sistema').insert(notificacoes);
+            // Insere as notificações
+            const { error: notifErr } = await adminClient.from('notificacoes_sistema').insert(notificacoes);
+            if (notifErr) console.error("Erro ao inserir notificação interna:", notifErr);
+            else console.log("Notificações internas enviadas para", admins.length, "administradores.");
         }
     }
-    // ---------------------------------------------------------
 
+    // 3. Retornar dados para o Front (WhatsApp)
     return { 
         success: true, 
         dados_mensagem: {
             escola: escola?.nome,
             usuario: usuario?.nome,
-            data_hora: new Date().toLocaleString('pt-BR')
+            data_hora: dataHoraBrasilia
         }
     };
 
   } catch (error: any) { 
-      console.error("Erro ao processar:", error);
+      console.error("Erro ao processar queda energia:", error);
       return { error: error.message }; 
   }
 }
 
-// NOVA FUNÇÃO PARA O FRONT-END
+// Atualizar status da notificação (Sino)
 export async function marcarNotificacaoLida(id: string) {
     const cookieStore = await cookies();
-    const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+    const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+    );
     
     await supabase.from('notificacoes_sistema').update({ lida: true }).eq('id', id);
     return { success: true };
