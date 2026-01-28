@@ -4,9 +4,9 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
 // --- HELPER: CLIENTE ADMIN ---
-// Permite que o sistema execute ações privilegiadas (como notificar Admins)
 async function getSupabaseAdmin() {
   const cookieStore = await cookies();
+  // Garante o uso da chave de serviço para furar bloqueios de RLS
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
   return createServerClient(
@@ -20,6 +20,44 @@ async function getSupabaseAdmin() {
       },
     }
   );
+}
+
+// ==========================================
+//      NOVA FUNÇÃO: DADOS DO DASHBOARD
+// ==========================================
+// Resolve o problema de permissão buscando dados via Admin
+export async function getDadosDashboard(userId: string, escolaId: string | null, isRegional: boolean) {
+    const admin = await getSupabaseAdmin();
+    
+    // 1. DADOS DE ÁGUA (Mês Atual)
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
+    
+    let queryWater = admin.from('consumo_agua')
+        .select('consumo_dia, excedeu_limite')
+        .gte('data_leitura', startOfMonth)
+        .lte('data_leitura', endOfMonth);
+
+    // Se NÃO for Regional, filtra pela escola. Se for Regional, traz TUDO.
+    if (!isRegional && escolaId) {
+        queryWater = queryWater.eq('escola_id', escolaId);
+    }
+    
+    const { data: waterData } = await queryWater;
+
+    // 2. NOTIFICAÇÕES (Do usuário logado)
+    const { data: notifs } = await admin
+        .from('notificacoes_sistema')
+        .select('*')
+        .eq('usuario_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+    return { 
+        waterData: waterData || [], 
+        notificacoes: notifs || [] 
+    };
 }
 
 // ==========================================
@@ -432,7 +470,6 @@ export async function reportarQuedaEnergia(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Salvar na Tabela de Energia (Registro Oficial)
     const { error } = await supabase.from('notificacoes_energia').insert({
         escola_id: data.escola_id,
         registrado_por: user.id,
@@ -445,18 +482,16 @@ export async function reportarQuedaEnergia(data: any) {
 
     if (error) throw error;
 
-    // Buscar dados para enriquecer as mensagens
     const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
     const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
 
-    // Data formatada no fuso de Brasília
     const dataHoraBrasilia = new Date().toLocaleString('pt-BR', { 
         timeZone: 'America/Sao_Paulo',
         dateStyle: 'short',
         timeStyle: 'medium'
     });
 
-    // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
+    // Notificar Admins
     if (!data.resolvido_antecipadamente) {
         const adminClient = await getSupabaseAdmin();
 

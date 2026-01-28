@@ -8,11 +8,10 @@ import {
   FileWarning, ListX, Zap, ChevronRight, Lightbulb, Power, BellRing, Check 
 } from 'lucide-react';
 import { supabase } from '@/app/lib/supabase';
-import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia, marcarNotificacaoLida } from './actions';
+import { createNewUser, updateSystemUser, deleteSystemUser, resetUserPassword, reportarQuedaEnergia, marcarNotificacaoLida, getDadosDashboard } from './actions';
 import Link from 'next/link';
 import jsPDF from 'jspdf';
 
-// --- CONSTANTE QUE ESTAVA FALTANDO ---
 const NOMES_ETAPAS = [
   "1. Processo SEI",
   "2. Vistoria e Relatório",
@@ -27,34 +26,22 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [usuarioLogado, setUsuarioLogado] = useState<any>(null);
   
-  // Dados do Dashboard
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [zeladorias, setZeladorias] = useState<any[]>([]); 
   const [alertasVencimento, setAlertasVencimento] = useState<any[]>([]); 
   const [notificacoesPendentes, setNotificacoesPendentes] = useState<any[]>([]);
-  
-  // Estatísticas
   const [stats, setStats] = useState({ total: 0, emAndamento: 0, concluidos: 0, isentos: 0 });
   const [etapasCount, setEtapasCount] = useState<number[]>(new Array(7).fill(0));
-  
-  // Indicadores
   const [waterAvg, setWaterAvg] = useState(0);
   const [inspectionRate, setInspectionRate] = useState(0);
   const [justificativasMes, setJustificativasMes] = useState(0); 
   const [rankingPendencias, setRankingPendencias] = useState<any[]>([]);
-
-  // Dados Auxiliares
   const [escolas, setEscolas] = useState<any[]>([]);
-  
-  // Modais
   const [modalType, setModalType] = useState<'create' | 'edit' | 'reset' | null>(null);
   const [formData, setFormData] = useState({ id: '', nome: '', email: '', senha: '', perfil: 'Operacional', escola_id: '' });
   const [loadingAction, setLoadingAction] = useState(false);
-
-  // --- NOTIFICAÇÕES E ENERGIA ---
   const [notificacoesSistema, setNotificacoesSistema] = useState<any[]>([]);
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
-  
   const [showEnergyModal, setShowEnergyModal] = useState(false);
   const [energyStep, setEnergyStep] = useState(1);
   const [energyData, setEnergyData] = useState({ abrangencia: '', descricao: '' });
@@ -64,7 +51,7 @@ export default function Dashboard() {
       setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        const { data: profile } = await supabase.from('usuarios').select('perfil, escola_id').eq('email', user.email).single();
+        const { data: profile } = await supabase.from('usuarios').select('perfil, escola_id, id').eq('email', user.email).single();
         const userData = { ...profile, email: user.email, is_admin: profile?.perfil === 'Regional' };
         setUsuarioLogado(userData);
         
@@ -79,13 +66,34 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
-    // 1. Notificações Pendentes (Fiscalização)
+    // 1. CARREGAMENTO PRIVILEGIADO (Água e Notificações)
+    // Usa Server Action para garantir acesso total aos dados (Admin vê tudo)
+    const dadosDashboard = await getDadosDashboard(userProfile.id, userProfile.escola_id, userProfile.is_admin);
+    
+    // Processa Água
+    if (dadosDashboard.waterData && dadosDashboard.waterData.length > 0) {
+        const totalConsumo = dadosDashboard.waterData.reduce((acc: number, curr: any) => acc + (Number(curr.consumo_dia) || 0), 0);
+        setWaterAvg(totalConsumo / dadosDashboard.waterData.length);
+        const totalJustificativas = dadosDashboard.waterData.filter((r: any) => r.excedeu_limite).length;
+        setJustificativasMes(totalJustificativas);
+    } else {
+        setWaterAvg(0);
+        setJustificativasMes(0);
+    }
+
+    // Processa Notificações
+    if (dadosDashboard.notificacoes) {
+        setNotificacoesSistema(dadosDashboard.notificacoes);
+    }
+
+    // 2. DADOS PADRÃO (Respeitam RLS do Cliente)
+    // Pendências
     if (!userProfile.is_admin && userProfile.escola_id) {
         const { data: cobrancas } = await supabase.from('fiscalizacoes_respostas').select('*, fiscalizacoes_eventos(data_referencia)').eq('escola_id', userProfile.escola_id).eq('notificado', true).eq('respondido', false);
         if (cobrancas) setNotificacoesPendentes(cobrancas);
     }
 
-    // 2. Zeladorias
+    // Zeladorias
     let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
     if (!userProfile.is_admin && userProfile.escola_id) queryZel = queryZel.eq('escola_id', userProfile.escola_id);
     const { data: dataZel } = await queryZel;
@@ -108,17 +116,7 @@ export default function Dashboard() {
         setAlertasVencimento(alertas);
     }
 
-    // 3. Água
-    const now = new Date(); const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString(); const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
-    let queryWater = supabase.from('consumo_agua').select('consumo_dia, excedeu_limite').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
-    if (!userProfile.is_admin && userProfile.escola_id) queryWater = queryWater.eq('escola_id', userProfile.escola_id);
-    const { data: waterData } = await queryWater;
-    if (waterData && waterData.length > 0) {
-        const totalConsumo = waterData.reduce((acc, curr) => acc + (Number(curr.consumo_dia) || 0), 0); setWaterAvg(totalConsumo / waterData.length);
-        const totalJustificativas = waterData.filter(r => r.excedeu_limite).length; setJustificativasMes(totalJustificativas);
-    }
-
-    // 4. Fiscalização
+    // Fiscalização
     let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido, escolas(nome)');
     if (!userProfile.is_admin && userProfile.escola_id) queryInsp = queryInsp.eq('escola_id', userProfile.escola_id);
     const { data: inspData } = await queryInsp;
@@ -135,26 +133,13 @@ export default function Dashboard() {
         setRankingPendencias(rankingArray);
     }
 
-    // 5. Usuários
+    // Usuários
     let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
     if (!userProfile.is_admin && userProfile.escola_id) queryUser = queryUser.eq('escola_id', userProfile.escola_id);
     const { data: dataUser } = await queryUser; if (dataUser) setUsuarios(dataUser);
-
-    // 6. Notificações do Sistema (Sino)
-    // Busca apenas as do usuário logado (devido RLS, mas garantimos aqui pelo filtro)
-    // Limitamos a 20 para não pesar
-    const { data: notifs } = await supabase
-        .from('notificacoes_sistema')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(20);
-    
-    if (notifs) setNotificacoesSistema(notifs);
   };
 
   const loadEscolas = async () => { const { data } = await supabase.from('escolas').select('id, nome'); if (data) setEscolas(data); };
-
-  // --- AÇÕES DO SISTEMA ---
 
   const handleMarkAsRead = async (id: string) => {
     await marcarNotificacaoLida(id);
@@ -218,7 +203,7 @@ export default function Dashboard() {
             const info = res.dados_mensagem;
             if (!info) return;
 
-            const numeroCentral = "551124422286"; // ALTERAR PARA O NÚMERO CORRETO
+            const numeroCentral = "5511999999999"; 
             
             const textoMensagem = 
 `*🚨 ALERTA: Queda de Energia - SGE*
@@ -328,39 +313,21 @@ _Gerado pelo SGE_`;
           </div>
           
           <div className="flex gap-4 items-center">
-             
-             {/* --- ÍCONE DE NOTIFICAÇÕES (SINO) --- */}
              <div className="relative">
-                <button 
-                    onClick={() => setShowNotifDropdown(!showNotifDropdown)}
-                    className="p-3 bg-white rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 relative transition-colors"
-                >
+                <button onClick={() => setShowNotifDropdown(!showNotifDropdown)} className="p-3 bg-white rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 relative transition-colors">
                     <BellRing size={20} />
-                    {naoLidas > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full animate-bounce shadow-sm">
-                            {naoLidas}
-                        </span>
-                    )}
+                    {naoLidas > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full animate-bounce shadow-sm">{naoLidas}</span>}
                 </button>
-
                 {showNotifDropdown && (
                     <div className="absolute right-0 top-14 w-80 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between items-center">
-                            <span className="font-bold text-sm text-slate-700">Notificações</span>
-                            <span className="text-xs text-slate-400">{naoLidas} novas</span>
-                        </div>
+                        <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between items-center"><span className="font-bold text-sm text-slate-700">Notificações</span><span className="text-xs text-slate-400">{naoLidas} novas</span></div>
                         <div className="max-h-64 overflow-y-auto">
                             {notificacoesSistema.length === 0 && <div className="p-6 text-center text-xs text-slate-400 italic">Nenhuma notificação no momento.</div>}
-                            
                             {notificacoesSistema.map(notif => (
                                 <div key={notif.id} className={`p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors ${notif.lida ? 'opacity-60' : 'bg-blue-50/30 border-l-4 border-l-blue-500'}`}>
                                     <div className="flex justify-between items-start mb-1">
                                         <h4 className="font-bold text-xs text-slate-800 line-clamp-1">{notif.titulo}</h4>
-                                        {!notif.lida && (
-                                            <button onClick={() => handleMarkAsRead(notif.id)} className="text-blue-500 hover:text-blue-700 p-1 hover:bg-blue-100 rounded" title="Marcar como lida">
-                                                <Check size={14}/>
-                                            </button>
-                                        )}
+                                        {!notif.lida && <button onClick={() => handleMarkAsRead(notif.id)} className="text-blue-500 hover:text-blue-700 p-1 hover:bg-blue-100 rounded" title="Marcar como lida"><Check size={14}/></button>}
                                     </div>
                                     <p className="text-xs text-slate-500 leading-relaxed mb-2 line-clamp-2">{notif.mensagem}</p>
                                     <span className="text-[10px] text-slate-300 block text-right">{new Date(notif.created_at).toLocaleString('pt-BR')}</span>
@@ -371,7 +338,6 @@ _Gerado pelo SGE_`;
                 )}
              </div>
 
-            {/* BOTÃO ENERGIA (ESCOLAS) */}
             {!usuarioLogado?.is_admin && (
                 <button onClick={openEnergyWizard} className="bg-yellow-400 hover:bg-yellow-500 text-yellow-900 px-4 py-3 rounded-xl font-bold flex gap-2 shadow-lg shadow-yellow-400/20 transition-transform hover:scale-105 animate-pulse">
                     <Zap size={20} fill="currentColor"/> Relatar Queda de Energia
@@ -383,165 +349,32 @@ _Gerado pelo SGE_`;
           </div>
         </header>
 
-        {notificacoesPendentes.length > 0 && (
-             <div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse">
-                <div>
-                    <h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Pendência de Fiscalização</h3>
-                    <p className="text-red-600 mt-1 font-medium">Você possui questionários não respondidos.</p>
-                </div>
-                <Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg">Resolver</Link>
-             </div>
-        )}
+        {notificacoesPendentes.length > 0 && (<div className="mb-8 bg-red-50 border-l-8 border-red-500 p-6 rounded-r-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between animate-pulse"><div><h3 className="text-red-700 font-black text-xl flex items-center gap-2"><Bell size={24} fill="currentColor"/> Pendência de Fiscalização</h3><p className="text-red-600 mt-1 font-medium">Você possui questionários não respondidos.</p></div><Link href="/fiscalizacoes" className="mt-4 md:mt-0 bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg">Resolver</Link></div>)}
 
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
-                <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div><span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Zeladorias</span></div>
-                <div><span className="text-4xl font-black text-slate-800">{stats.total}</span><p className="text-slate-400 text-xs mt-1">Processos cadastrados</p></div>
-            </div>
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
-                <div className="flex justify-between items-start mb-4"><div className="p-3 bg-cyan-50 text-cyan-600 rounded-xl"><Droplets size={24} /></div><span className="bg-cyan-100 text-cyan-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Média Mensal</span></div>
-                <div><span className="text-4xl font-black text-slate-800">{waterAvg.toFixed(1)}</span><span className="text-sm font-bold text-slate-400 ml-1">m³/dia</span><p className="text-slate-400 text-xs mt-1">Consumo médio diário</p></div>
-            </div>
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
-                <div className="flex justify-between items-start mb-4"><div className="p-3 bg-red-50 text-red-600 rounded-xl"><FileWarning size={24} /></div><span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Alertas Água</span></div>
-                <div><span className="text-4xl font-black text-slate-800">{justificativasMes}</span><p className="text-slate-400 text-xs mt-1">Justificativas este mês</p></div>
-            </div>
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all">
-                <div className="flex justify-between items-start mb-4"><div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><ClipboardList size={24} /></div><span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Respostas</span></div>
-                <div><span className="text-4xl font-black text-slate-800">{inspectionRate}%</span><p className="text-slate-400 text-xs mt-1">Taxa de conformidade</p></div>
-            </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all"><div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Home size={24} /></div><span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Zeladorias</span></div><div><span className="text-4xl font-black text-slate-800">{stats.total}</span><p className="text-slate-400 text-xs mt-1">Processos cadastrados</p></div></div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all"><div className="flex justify-between items-start mb-4"><div className="p-3 bg-cyan-50 text-cyan-600 rounded-xl"><Droplets size={24} /></div><span className="bg-cyan-100 text-cyan-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Média Mensal</span></div><div><span className="text-4xl font-black text-slate-800">{waterAvg.toFixed(1)}</span><span className="text-sm font-bold text-slate-400 ml-1">m³/dia</span><p className="text-slate-400 text-xs mt-1">Consumo médio diário</p></div></div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all"><div className="flex justify-between items-start mb-4"><div className="p-3 bg-red-50 text-red-600 rounded-xl"><FileWarning size={24} /></div><span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Alertas Água</span></div><div><span className="text-4xl font-black text-slate-800">{justificativasMes}</span><p className="text-slate-400 text-xs mt-1">Justificativas este mês</p></div></div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col relative overflow-hidden group hover:shadow-md transition-all"><div className="flex justify-between items-start mb-4"><div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><ClipboardList size={24} /></div><span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase">Respostas</span></div><div><span className="text-4xl font-black text-slate-800">{inspectionRate}%</span><p className="text-slate-400 text-xs mt-1">Taxa de conformidade</p></div></div>
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
-            <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex items-center gap-2 mb-6"><BarChart3 className="text-blue-600" /><h3 className="text-lg font-bold text-slate-800">Status dos Processos (Funil)</h3></div>
-                <div className="space-y-4">
-                    {NOMES_ETAPAS.map((nome, index) => {
-                        const count = etapasCount[index]; const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0; const isConcluido = index === 6;
-                        return (
-                            <div key={index} className="group">
-                                <div className="flex justify-between items-center mb-1"><span className={`text-xs font-bold ${count > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{nome}</span><span className={`text-xs font-black ${isConcluido ? 'text-green-600' : 'text-blue-600'}`}>{count}</span></div>
-                                <div className="w-full bg-slate-50 rounded-full h-2 overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${isConcluido ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${percentage > 0 ? Math.max(percentage, 2) : 0}%` }}></div></div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex items-center gap-2 mb-6"><ListX className="text-red-500" /><h3 className="text-lg font-bold text-slate-800">Ranking de Pendências</h3></div>
-                {rankingPendencias.length > 0 ? (
-                    <div className="space-y-5">
-                        {rankingPendencias.map((item, idx) => (
-                            <div key={idx} className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-red-50 text-red-600 font-bold flex items-center justify-center text-xs shrink-0">{idx + 1}º</div>
-                                <div className="flex-1"><div className="flex justify-between items-center mb-1"><span className="text-xs font-bold text-slate-700 truncate max-w-[120px]" title={item.nome}>{item.nome}</span><span className="text-xs font-black text-red-600">{item.qtd} un.</span></div><div className="w-full bg-slate-50 rounded-full h-2"><div className="bg-red-400 h-2 rounded-full" style={{ width: `${Math.min((item.qtd / rankingPendencias[0].qtd) * 100, 100)}%` }}></div></div></div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-center pb-8 opacity-50"><CheckCircle2 size={48} className="text-green-500 mb-2"/><p className="text-sm font-bold text-slate-500">Tudo em dia!</p><p className="text-xs text-slate-400">Nenhuma pendência crítica.</p></div>
-                )}
-            </div>
+            <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-slate-100"><div className="flex items-center gap-2 mb-6"><BarChart3 className="text-blue-600" /><h3 className="text-lg font-bold text-slate-800">Status dos Processos (Funil)</h3></div><div className="space-y-4">{NOMES_ETAPAS.map((nome, index) => {const count = etapasCount[index]; const percentage = stats.total > 0 ? (count / stats.total) * 100 : 0; const isConcluido = index === 6;return (<div key={index} className="group"><div className="flex justify-between items-center mb-1"><span className={`text-xs font-bold ${count > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{nome}</span><span className={`text-xs font-black ${isConcluido ? 'text-green-600' : 'text-blue-600'}`}>{count}</span></div><div className="w-full bg-slate-50 rounded-full h-2 overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${isConcluido ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${percentage > 0 ? Math.max(percentage, 2) : 0}%` }}></div></div></div>);})}</div></div>
+            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"><div className="flex items-center gap-2 mb-6"><ListX className="text-red-500" /><h3 className="text-lg font-bold text-slate-800">Ranking de Pendências</h3></div>{rankingPendencias.length > 0 ? (<div className="space-y-5">{rankingPendencias.map((item, idx) => (<div key={idx} className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-red-50 text-red-600 font-bold flex items-center justify-center text-xs shrink-0">{idx + 1}º</div><div className="flex-1"><div className="flex justify-between items-center mb-1"><span className="text-xs font-bold text-slate-700 truncate max-w-[120px]" title={item.nome}>{item.nome}</span><span className="text-xs font-black text-red-600">{item.qtd} un.</span></div><div className="w-full bg-slate-50 rounded-full h-2"><div className="bg-red-400 h-2 rounded-full" style={{ width: `${Math.min((item.qtd / rankingPendencias[0].qtd) * 100, 100)}%` }}></div></div></div></div>))}</div>) : (<div className="h-full flex flex-col items-center justify-center text-center pb-8 opacity-50"><CheckCircle2 size={48} className="text-green-500 mb-2"/><p className="text-sm font-bold text-slate-500">Tudo em dia!</p><p className="text-xs text-slate-400">Nenhuma pendência crítica.</p></div>)}</div>
         </section>
 
-        <section className="mb-10">
-             {alertasVencimento.length > 0 ? (
-                <div className="bg-red-50/50 p-6 rounded-3xl border border-red-100">
-                    <div className="flex items-center gap-2 mb-4"><AlertTriangle className="text-red-500 animate-pulse"/><h3 className="text-lg font-bold text-slate-800">Próximos Vencimentos (Zeladoria)</h3></div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {alertasVencimento.map(alerta => (
-                            <div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
-                                <div><h4 className="font-bold text-slate-800 text-sm truncate w-40">{alerta.escolas?.nome}</h4><p className="text-xs text-slate-500">{alerta.nome_zelador}</p></div>
-                                <div className={`px-3 py-1 rounded-lg text-xs font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{alerta.diasRestantes < 0 ? `${Math.abs(alerta.diasRestantes)} dias atrasado` : `${alerta.diasRestantes} dias`}</div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            ) : null}
-        </section>
+        <section className="mb-10">{alertasVencimento.length > 0 ? (<div className="bg-red-50/50 p-6 rounded-3xl border border-red-100"><div className="flex items-center gap-2 mb-4"><AlertTriangle className="text-red-500 animate-pulse"/><h3 className="text-lg font-bold text-slate-800">Próximos Vencimentos (Zeladoria)</h3></div><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{alertasVencimento.map(alerta => (<div key={alerta.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center"><div><h4 className="font-bold text-slate-800 text-sm truncate w-40">{alerta.escolas?.nome}</h4><p className="text-xs text-slate-500">{alerta.nome_zelador}</p></div><div className={`px-3 py-1 rounded-lg text-xs font-bold ${alerta.diasRestantes < 0 ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{alerta.diasRestantes < 0 ? `${Math.abs(alerta.diasRestantes)} dias atrasado` : `${alerta.diasRestantes} dias`}</div></div>))}</div></div>) : null}</section>
 
-        <section className="border-t border-slate-200 pt-10">
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-3"><div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Users size={20} /></div><h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2></div>
-                {usuarioLogado?.is_admin && <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"><Plus size={16}/> Adicionar Usuário</button>}
-            </div>
-            <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
-                <table className="w-full text-left">
-                    <thead className="bg-slate-50/50 text-slate-400 text-[10px] uppercase tracking-widest font-bold"><tr><th className="p-6">Nome</th><th className="p-6">Escola</th><th className="p-6">Perfil</th><th className="p-6 text-right">Ações</th></tr></thead>
-                    <tbody className="divide-y divide-slate-50 text-sm">
-                    {usuarios.map(user => (
-                        <tr key={user.id} className="hover:bg-slate-50/50">
-                        <td className="p-6"><div className="font-bold">{user.nome}</div><div className="text-slate-400 text-xs">{user.email}</div></td>
-                        <td className="p-6 text-slate-500">{user.escolas?.nome || '-'}</td>
-                        <td className="p-6"><span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>{user.perfil}</span></td>
-                        <td className="p-6 flex justify-end gap-2">{usuarioLogado?.is_admin && (<><button onClick={() => openReset(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Key size={18}/></button><button onClick={() => openEdit(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit size={18}/></button><button onClick={() => handleDelete(user.id, user.nome)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button></>)}</td>
-                        </tr>
-                    ))}
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        <section className="border-t border-slate-200 pt-10"><div className="flex justify-between items-center mb-6"><div className="flex items-center gap-3"><div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Users size={20} /></div><h2 className="text-xl font-bold text-slate-800">Usuários do Sistema</h2></div>{usuarioLogado?.is_admin && <button onClick={() => { resetForm(); setModalType('create'); }} className="text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"><Plus size={16}/> Adicionar Usuário</button>}</div><div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden"><table className="w-full text-left"><thead className="bg-slate-50/50 text-slate-400 text-[10px] uppercase tracking-widest font-bold"><tr><th className="p-6">Nome</th><th className="p-6">Escola</th><th className="p-6">Perfil</th><th className="p-6 text-right">Ações</th></tr></thead><tbody className="divide-y divide-slate-50 text-sm">{usuarios.map(user => (<tr key={user.id} className="hover:bg-slate-50/50"><td className="p-6"><div className="font-bold">{user.nome}</div><div className="text-slate-400 text-xs">{user.email}</div></td><td className="p-6 text-slate-500">{user.escolas?.nome || '-'}</td><td className="p-6"><span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${user.perfil === 'Regional' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>{user.perfil}</span></td><td className="p-6 flex justify-end gap-2">{usuarioLogado?.is_admin && (<><button onClick={() => openReset(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Key size={18}/></button><button onClick={() => openEdit(user)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit size={18}/></button><button onClick={() => handleDelete(user.id, user.nome)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button></>)}</td></tr>))}</tbody></table></div></section>
 
-        {modalType && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-3xl p-6 w-full max-w-md animate-in zoom-in duration-200">
-              <div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl">{modalType === 'create' ? 'Novo Usuário' : modalType === 'edit' ? 'Editar' : 'Nova Senha'}</h3><button onClick={() => setModalType(null)}><X className="text-slate-400"/></button></div>
-              <form onSubmit={handleSave} className="space-y-4">
-                {modalType !== 'reset' && (<><input required placeholder="Nome" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/><input required type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/><select value={formData.escola_id} onChange={e => setFormData({...formData, escola_id: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"><option value="">Sem vínculo</option>{escolas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}</select><div className="flex gap-2">{['Operacional', 'Regional'].map(p => <button key={p} type="button" onClick={() => setFormData({...formData, perfil: p})} className={`flex-1 p-2 rounded-xl border text-xs font-bold ${formData.perfil === p ? 'bg-slate-800 text-white' : 'bg-white'}`}>{p}</button>)}</div></>)}
-                {(modalType === 'create' || modalType === 'reset') && <input required type="password" placeholder="Senha" minLength={6} value={formData.senha} onChange={e => setFormData({...formData, senha: e.target.value})} className="w-full bg-white border border-yellow-300 p-3 rounded-xl"/>}
-                <button disabled={loadingAction} className="w-full bg-blue-600 text-white font-bold p-3 rounded-xl">{loadingAction ? <Loader2 className="animate-spin mx-auto"/> : 'Salvar'}</button>
-              </form>
-            </div>
-          </div>
-        )}
+        {modalType && (<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"><div className="bg-white rounded-3xl p-6 w-full max-w-md animate-in zoom-in duration-200"><div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl">{modalType === 'create' ? 'Novo Usuário' : modalType === 'edit' ? 'Editar' : 'Nova Senha'}</h3><button onClick={() => setModalType(null)}><X className="text-slate-400"/></button></div><form onSubmit={handleSave} className="space-y-4">{modalType !== 'reset' && (<><input required placeholder="Nome" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/><input required type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"/><select value={formData.escola_id} onChange={e => setFormData({...formData, escola_id: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl"><option value="">Sem vínculo</option>{escolas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}</select><div className="flex gap-2">{['Operacional', 'Regional'].map(p => <button key={p} type="button" onClick={() => setFormData({...formData, perfil: p})} className={`flex-1 p-2 rounded-xl border text-xs font-bold ${formData.perfil === p ? 'bg-slate-800 text-white' : 'bg-white'}`}>{p}</button>)}</div></>)}{(modalType === 'create' || modalType === 'reset') && <input required type="password" placeholder="Senha" minLength={6} value={formData.senha} onChange={e => setFormData({...formData, senha: e.target.value})} className="w-full bg-white border border-yellow-300 p-3 rounded-xl"/>}<button disabled={loadingAction} className="w-full bg-blue-600 text-white font-bold p-3 rounded-xl">{loadingAction ? <Loader2 className="animate-spin mx-auto"/> : 'Salvar'}</button></form></div></div>)}
 
         {showEnergyModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
                 <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
-                    <div className="bg-slate-50 p-6 border-b border-slate-100 flex justify-between items-center">
-                        <div><h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Zap className="text-yellow-500" fill="currentColor" /> Relatar Queda de Energia</h3><p className="text-sm text-slate-500 font-medium">Etapa {energyStep} de 4: Triagem</p></div>
-                        <button onClick={() => setShowEnergyModal(false)} className="bg-white p-2 rounded-full border hover:bg-slate-100"><X size={20} className="text-slate-400"/></button>
-                    </div>
-                    <div className="p-8 overflow-y-auto">
-                        {energyStep === 1 && (
-                            <div className="space-y-6">
-                                <h4 className="text-lg font-bold text-slate-700">Onde a energia caiu?</h4>
-                                <p className="text-slate-500 text-sm">Selecione se o problema parece ser restrito ao prédio da unidade ou se é algo que afeta toda a vizinhança. Isso nos ajuda a agilizar o diagnóstico.</p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <button onClick={() => handleEnergyAction('next', 'ESCOLA')} className="p-6 border-2 border-slate-100 rounded-2xl hover:border-blue-500 hover:bg-blue-50 transition-all group text-left"><School size={32} className="text-slate-300 group-hover:text-blue-600 mb-3"/><span className="block font-bold text-slate-700 group-hover:text-blue-700">Apenas na Escola</span></button>
-                                    <button onClick={() => handleEnergyAction('next', 'REGIÃO')} className="p-6 border-2 border-slate-100 rounded-2xl hover:border-purple-500 hover:bg-purple-50 transition-all group text-left"><Home size={32} className="text-slate-300 group-hover:text-purple-600 mb-3"/><span className="block font-bold text-slate-700 group-hover:text-purple-700">Em toda a Região</span></button>
-                                </div>
-                            </div>
-                        )}
-                        {energyStep === 2 && (
-                            <div className="space-y-6">
-                                <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 flex gap-3"><Lightbulb className="text-yellow-600 shrink-0"/><p className="text-sm text-yellow-800 font-medium">Às vezes, o reestabelecimento é simples e depende apenas de religar a chave.</p></div>
-                                <h4 className="text-lg font-bold text-slate-700">Confira o Quadro de Energia</h4>
-                                <p className="text-slate-500 text-sm">Verifique se o disjuntor principal ou a chave geral da escola desarmou (está na posição "OFF").</p>
-                                <button onClick={() => handleEnergyAction('next')} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold hover:bg-blue-700 flex items-center justify-center gap-2">Já verifiquei e o problema persiste <ChevronRight size={20}/></button>
-                            </div>
-                        )}
-                        {energyStep === 3 && (
-                            <div className="space-y-6">
-                                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 flex gap-3"><AlertTriangle className="text-orange-600 shrink-0"/><p className="text-sm text-orange-800 font-medium">Desconecte aparelhos sensíveis das tomadas para evitar danos no retorno da energia.</p></div>
-                                <h4 className="text-lg font-bold text-slate-700">Verifique Sobrecargas</h4>
-                                <p className="text-slate-500 text-sm">Algum equipamento de alta potência foi ligado recentemente? Verifique se há cheiro de queimado ou barulhos estranhos no quadro de força.</p>
-                                <button onClick={() => handleEnergyAction('next')} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold hover:bg-blue-700 flex items-center justify-center gap-2">Tudo verificado, prosseguir <ChevronRight size={20}/></button>
-                            </div>
-                        )}
-                        {energyStep === 4 && (
-                            <div className="space-y-6">
-                                <h4 className="text-lg font-bold text-slate-700">Detalhes da Ocorrência</h4>
-                                <p className="text-slate-500 text-sm">Descreva de forma objetiva o que aconteceu. Exemplos: "A luz caiu após um estouro no poste", "Fase meia-luz na secretaria".</p>
-                                <textarea className="w-full border-2 border-slate-200 rounded-xl p-4 h-32 focus:border-blue-500 outline-none resize-none" placeholder="Descreva o problema aqui..." value={energyData.descricao} onChange={e => setEnergyData({...energyData, descricao: e.target.value})}></textarea>
-                                <div className="bg-slate-100 p-4 rounded-xl text-xs text-slate-500">Ao clicar em enviar, um chamado oficial será aberto e encaminhado para SEOM e SEFISC.</div>
-                                <button onClick={() => handleEnergyAction('finish')} className="w-full bg-red-600 text-white p-4 rounded-xl font-bold hover:bg-red-700 flex items-center justify-center gap-2 shadow-lg shadow-red-500/20">{loadingAction ? <Loader2 className="animate-spin"/> : 'Confirmar e Enviar Chamado'}</button>
-                            </div>
-                        )}
-                    </div>
-                    <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-center">
-                        <button onClick={() => handleEnergyAction('cancel')} className="text-green-600 font-bold text-sm flex items-center gap-2 hover:bg-green-50 px-4 py-2 rounded-lg transition-colors"><Power size={16}/> A energia voltou! (Cancelar Chamado)</button>
-                    </div>
+                    <div className="bg-slate-50 p-6 border-b border-slate-100 flex justify-between items-center"><div><h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Zap className="text-yellow-500" fill="currentColor" /> Relatar Queda de Energia</h3><p className="text-sm text-slate-500 font-medium">Etapa {energyStep} de 4: Triagem</p></div><button onClick={() => setShowEnergyModal(false)} className="bg-white p-2 rounded-full border hover:bg-slate-100"><X size={20} className="text-slate-400"/></button></div>
+                    <div className="p-8 overflow-y-auto">{energyStep === 1 && (<div className="space-y-6"><h4 className="text-lg font-bold text-slate-700">Onde a energia caiu?</h4><p className="text-slate-500 text-sm">Selecione se o problema parece ser restrito ao prédio da unidade ou se é algo que afeta toda a vizinhança. Isso nos ajuda a agilizar o diagnóstico.</p><div className="grid grid-cols-2 gap-4"><button onClick={() => handleEnergyAction('next', 'ESCOLA')} className="p-6 border-2 border-slate-100 rounded-2xl hover:border-blue-500 hover:bg-blue-50 transition-all group text-left"><School size={32} className="text-slate-300 group-hover:text-blue-600 mb-3"/><span className="block font-bold text-slate-700 group-hover:text-blue-700">Apenas na Escola</span></button><button onClick={() => handleEnergyAction('next', 'REGIÃO')} className="p-6 border-2 border-slate-100 rounded-2xl hover:border-purple-500 hover:bg-purple-50 transition-all group text-left"><Home size={32} className="text-slate-300 group-hover:text-purple-600 mb-3"/><span className="block font-bold text-slate-700 group-hover:text-purple-700">Em toda a Região</span></button></div></div>)}{energyStep === 2 && (<div className="space-y-6"><div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 flex gap-3"><Lightbulb className="text-yellow-600 shrink-0"/><p className="text-sm text-yellow-800 font-medium">Às vezes, o reestabelecimento é simples e depende apenas de religar a chave.</p></div><h4 className="text-lg font-bold text-slate-700">Confira o Quadro de Energia</h4><p className="text-slate-500 text-sm">Verifique se o disjuntor principal ou a chave geral da escola desarmou (está na posição "OFF").</p><button onClick={() => handleEnergyAction('next')} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold hover:bg-blue-700 flex items-center justify-center gap-2">Já verifiquei e o problema persiste <ChevronRight size={20}/></button></div>)}{energyStep === 3 && (<div className="space-y-6"><div className="bg-orange-50 p-4 rounded-xl border border-orange-100 flex gap-3"><AlertTriangle className="text-orange-600 shrink-0"/><p className="text-sm text-orange-800 font-medium">Desconecte aparelhos sensíveis das tomadas para evitar danos no retorno da energia.</p></div><h4 className="text-lg font-bold text-slate-700">Verifique Sobrecargas</h4><p className="text-slate-500 text-sm">Algum equipamento de alta potência foi ligado recentemente? Verifique se há cheiro de queimado ou barulhos estranhos no quadro de força.</p><button onClick={() => handleEnergyAction('next')} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold hover:bg-blue-700 flex items-center justify-center gap-2">Tudo verificado, prosseguir <ChevronRight size={20}/></button></div>)}{energyStep === 4 && (<div className="space-y-6"><h4 className="text-lg font-bold text-slate-700">Detalhes da Ocorrência</h4><p className="text-slate-500 text-sm">Descreva de forma objetiva o que aconteceu. Exemplos: "A luz caiu após um estouro no poste", "Fase meia-luz na secretaria".</p><textarea className="w-full border-2 border-slate-200 rounded-xl p-4 h-32 focus:border-blue-500 outline-none resize-none" placeholder="Descreva o problema aqui..." value={energyData.descricao} onChange={e => setEnergyData({...energyData, descricao: e.target.value})}></textarea><div className="bg-slate-100 p-4 rounded-xl text-xs text-slate-500">Ao clicar em enviar, um chamado oficial será aberto e encaminhado para SEOM e SEFISC.</div><button onClick={() => handleEnergyAction('finish')} className="w-full bg-red-600 text-white p-4 rounded-xl font-bold hover:bg-red-700 flex items-center justify-center gap-2 shadow-lg shadow-red-500/20">{loadingAction ? <Loader2 className="animate-spin"/> : 'Confirmar e Enviar Chamado'}</button></div>)}</div>
+                    <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-center"><button onClick={() => handleEnergyAction('cancel')} className="text-green-600 font-bold text-sm flex items-center gap-2 hover:bg-green-50 px-4 py-2 rounded-lg transition-colors"><Power size={16}/> A energia voltou! (Cancelar Chamado)</button></div>
                 </div>
             </div>
         )}
