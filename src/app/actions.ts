@@ -2,24 +2,11 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { createClient } from '@supabase/supabase-js' // Necessário para o Admin Client
-import nodemailer from 'nodemailer';
+import { createClient } from '@supabase/supabase-js'
 
-// --- CONFIGURAÇÃO DO TRANSPORTE DE E-MAIL (Opcional, caso volte a usar) ---
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  tls: { ciphers: "SSLv3", rejectUnauthorized: false },
-});
-
-// --- HELPER: CLIENTE ADMIN (Para furar bloqueios de permissão ao notificar) ---
-// Tenta usar a Service Role Key (se definida no .env) para garantir acesso total
+// --- HELPER: CLIENTE ADMIN (Para garantir que o sistema consiga notificar os Admins) ---
 const getSupabaseAdmin = () => {
+  // Tenta pegar a chave de serviço (Service Role) ou usa a anônima (caso não configurada, mas ideal é a Service)
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,18 +36,18 @@ export async function createNewUser(data: any) {
   const { data: authUser, error: authError } = await supabase.auth.signUp({
     email: data.email,
     password: data.senha,
-    options: { data: { nome: data.nome } } // Metadado opcional
+    options: { data: { nome: data.nome } }
   });
 
   if (authError) return { error: authError.message };
   if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
 
-  // 2. Criar Registro na Tabela 'usuarios' (Vínculo)
-  // Usamos um cliente admin aqui para garantir permissão de escrita se necessário
+  // 2. Criar Registro na Tabela 'usuarios'
+  // Usamos adminClient para evitar bloqueio de RLS na criação por outro usuário
   const adminClient = getSupabaseAdmin();
   
   const { error: dbError } = await adminClient.from('usuarios').insert({
-    id: authUser.user.id, // Vínculo crucial: ID do Auth = ID da Tabela
+    id: authUser.user.id,
     email: data.email,
     nome: data.nome,
     perfil: data.perfil,
@@ -68,7 +55,6 @@ export async function createNewUser(data: any) {
   });
 
   if (dbError) {
-    // Se falhar no banco, idealmente deletaríamos o Auth, mas por simplicidade retornamos erro
     return { error: "Erro ao salvar dados do perfil: " + dbError.message };
   }
 
@@ -94,13 +80,13 @@ export async function updateSystemUser(id: string, data: any) {
 }
 
 export async function deleteSystemUser(id: string) {
-  const supabase = getSupabaseAdmin(); // Admin para deletar sem restrições
+  const supabase = getSupabaseAdmin(); 
   
   // 1. Remover da tabela usuarios
   const { error: dbError } = await supabase.from('usuarios').delete().eq('id', id);
   if (dbError) return { error: dbError.message };
 
-  // 2. Remover do Auth (Supabase Admin API)
+  // 2. Remover do Auth
   const { error: authError } = await supabase.auth.admin.deleteUser(id);
   if (authError) return { error: authError.message };
 
@@ -207,23 +193,22 @@ export async function saveConsumoAgua(data: any) {
 
 export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
     const cookieStore = await cookies();
-    // Usa cliente Admin para garantir que o usuário Regional veja tudo sem restrição de RLS
-    // Se não tiver chave de serviço configurada, usa a anonima normal
-    let supabaseClient;
     
-    // Verifica usuário atual
-    const authClient = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+    // Verifica usuário para definir nível de acesso
+    const authClient = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+    );
+    
     const { data: { user } } = await authClient.auth.getUser();
-    
+    let supabaseClient = authClient;
+
     if (user) {
         const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
         if (profile?.perfil === 'Regional') {
             supabaseClient = getSupabaseAdmin(); // Admin vê tudo
-        } else {
-            supabaseClient = authClient; // Operacional vê o seu
         }
-    } else {
-        supabaseClient = authClient;
     }
 
     let query = supabaseClient.from('consumo_agua').select('*, escolas(nome), usuarios(nome)').order('data_leitura', { ascending: false });
@@ -288,7 +273,6 @@ export async function reportarQuedaEnergia(data: any) {
     // ---------------------------------------------------------
     if (!data.resolvido_antecipadamente) {
         // Usamos getSupabaseAdmin() para ignorar RLS. 
-        // Assim, o usuário 'Operacional' consegue encontrar os 'Regionais' e inserir avisos pra eles.
         const adminClient = getSupabaseAdmin();
 
         // Buscar todos os usuários com perfil Regional
@@ -311,7 +295,6 @@ export async function reportarQuedaEnergia(data: any) {
             // Insere as notificações
             const { error: notifErr } = await adminClient.from('notificacoes_sistema').insert(notificacoes);
             if (notifErr) console.error("Erro ao inserir notificação interna:", notifErr);
-            else console.log("Notificações internas enviadas para", admins.length, "administradores.");
         }
     }
 
