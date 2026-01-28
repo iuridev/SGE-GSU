@@ -66,74 +66,79 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboardData = async (userProfile: any) => {
-    // 1. CARREGAMENTO PRIVILEGIADO (Água e Notificações)
-    // Usa Server Action para garantir acesso total aos dados (Admin vê tudo)
-    const dadosDashboard = await getDadosDashboard(userProfile.id, userProfile.escola_id, userProfile.is_admin);
+    // 1. CARREGAMENTO CENTRALIZADO (RESOLVE PERMISSÕES)
+    const dados = await getDadosDashboard(userProfile.id, userProfile.escola_id, userProfile.is_admin);
     
-    // Processa Água
-    if (dadosDashboard.waterData && dadosDashboard.waterData.length > 0) {
-        const totalConsumo = dadosDashboard.waterData.reduce((acc: number, curr: any) => acc + (Number(curr.consumo_dia) || 0), 0);
-        setWaterAvg(totalConsumo / dadosDashboard.waterData.length);
-        const totalJustificativas = dadosDashboard.waterData.filter((r: any) => r.excedeu_limite).length;
+    // --- ZELADORIAS ---
+    if (dados.zeladorias) {
+        setZeladorias(dados.zeladorias);
+        const counts = new Array(7).fill(0);
+        dados.zeladorias.forEach((z: any) => { if (z.etapa_atual >= 1 && z.etapa_atual <= 7) counts[z.etapa_atual - 1]++; });
+        setEtapasCount(counts);
+        setStats({
+            total: dados.zeladorias.length,
+            emAndamento: dados.zeladorias.filter((z: any) => z.etapa_atual < 7).length,
+            concluidos: dados.zeladorias.filter((z: any) => z.etapa_atual === 7).length,
+            isentos: dados.zeladorias.filter((z: any) => z.isento_pagamento).length
+        });
+
+        // Alertas
+        const hoje = new Date();
+        const alertas = dados.zeladorias
+            .filter((z: any) => z.etapa_atual >= 6 && z.data_etapa_6)
+            .map((z: any) => {
+                const dataBase = new Date(z.data_etapa_6);
+                const validade = new Date(dataBase);
+                validade.setFullYear(dataBase.getFullYear() + 2);
+                const diasRestantes = Math.ceil((validade.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
+                return { ...z, validade, diasRestantes };
+            })
+            .filter((z: any) => z.diasRestantes < 90)
+            .sort((a: any, b: any) => a.diasRestantes - b.diasRestantes);
+        setAlertasVencimento(alertas);
+    }
+
+    // --- ÁGUA ---
+    if (dados.waterData && dados.waterData.length > 0) {
+        const totalConsumo = dados.waterData.reduce((acc: number, curr: any) => acc + (Number(curr.consumo_dia) || 0), 0);
+        setWaterAvg(totalConsumo / dados.waterData.length);
+        const totalJustificativas = dados.waterData.filter((r: any) => r.excedeu_limite).length;
         setJustificativasMes(totalJustificativas);
     } else {
         setWaterAvg(0);
         setJustificativasMes(0);
     }
 
-    // Processa Notificações
-    if (dadosDashboard.notificacoes) {
-        setNotificacoesSistema(dadosDashboard.notificacoes);
-    }
+    // --- FISCALIZAÇÕES (KPIs e Pendências) ---
+    if (dados.fiscalizacoes) {
+        const respondidos = dados.fiscalizacoes.filter((i: any) => i.respondido).length;
+        setInspectionRate(Math.round((respondidos / dados.fiscalizacoes.length) * 100) || 0);
 
-    // 2. DADOS PADRÃO (Respeitam RLS do Cliente)
-    // Pendências
-    if (!userProfile.is_admin && userProfile.escola_id) {
-        const { data: cobrancas } = await supabase.from('fiscalizacoes_respostas').select('*, fiscalizacoes_eventos(data_referencia)').eq('escola_id', userProfile.escola_id).eq('notificado', true).eq('respondido', false);
-        if (cobrancas) setNotificacoesPendentes(cobrancas);
-    }
-
-    // Zeladorias
-    let queryZel = supabase.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
-    if (!userProfile.is_admin && userProfile.escola_id) queryZel = queryZel.eq('escola_id', userProfile.escola_id);
-    const { data: dataZel } = await queryZel;
-    
-    if (dataZel) {
-        setZeladorias(dataZel);
-        const counts = new Array(7).fill(0);
-        dataZel.forEach(z => { if (z.etapa_atual >= 1 && z.etapa_atual <= 7) counts[z.etapa_atual - 1]++; });
-        setEtapasCount(counts);
-        setStats({
-            total: dataZel.length, emAndamento: dataZel.filter(z => z.etapa_atual < 7).length,
-            concluidos: dataZel.filter(z => z.etapa_atual === 7).length, isentos: dataZel.filter(z => z.isento_pagamento).length
-        });
-
-        const hoje = new Date();
-        const alertas = dataZel.filter(z => z.etapa_atual >= 6 && z.data_etapa_6).map(z => {
-            const dataBase = new Date(z.data_etapa_6); const validade = new Date(dataBase); validade.setFullYear(dataBase.getFullYear() + 2);
-            const diasRestantes = Math.ceil((validade.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)); return { ...z, validade, diasRestantes };
-        }).filter(z => z.diasRestantes < 90).sort((a, b) => a.diasRestantes - b.diasRestantes);
-        setAlertasVencimento(alertas);
-    }
-
-    // Fiscalização
-    let queryInsp = supabase.from('fiscalizacoes_respostas').select('respondido, escolas(nome)');
-    if (!userProfile.is_admin && userProfile.escola_id) queryInsp = queryInsp.eq('escola_id', userProfile.escola_id);
-    const { data: inspData } = await queryInsp;
-    if (inspData && inspData.length > 0) {
-        const respondidos = inspData.filter(i => i.respondido).length; setInspectionRate(Math.round((respondidos / inspData.length) * 100));
-        const pendentes = inspData.filter(i => !i.respondido);
+        const pendentes = dados.fiscalizacoes.filter((i: any) => !i.respondido);
         const rankingMap: Record<string, number> = {};
-        pendentes.forEach(p => { 
+        pendentes.forEach((p: any) => { 
             const escola: any = p.escolas;
             const nomeEscola = (Array.isArray(escola) ? escola[0]?.nome : escola?.nome) || 'Desconhecida'; 
             rankingMap[nomeEscola] = (rankingMap[nomeEscola] || 0) + 1; 
         });
-        const rankingArray = Object.entries(rankingMap).map(([nome, qtd]) => ({ nome, qtd })).sort((a, b) => b.qtd - a.qtd).slice(0, 5);
+        const rankingArray = Object.entries(rankingMap)
+            .map(([nome, qtd]) => ({ nome, qtd }))
+            .sort((a, b) => b.qtd - a.qtd)
+            .slice(0, 5);
         setRankingPendencias(rankingArray);
+
+        if (!userProfile.is_admin && userProfile.escola_id) {
+            const minhasPendencias = pendentes.filter((p: any) => p.notificado);
+            setNotificacoesPendentes(minhasPendencias);
+        }
     }
 
-    // Usuários
+    // --- NOTIFICAÇÕES SISTEMA ---
+    if (dados.notificacoes) {
+        setNotificacoesSistema(dados.notificacoes);
+    }
+
+    // --- USUÁRIOS ---
     let queryUser = supabase.from('usuarios').select('*, escolas(nome)').order('created_at', { ascending: false });
     if (!userProfile.is_admin && userProfile.escola_id) queryUser = queryUser.eq('escola_id', userProfile.escola_id);
     const { data: dataUser } = await queryUser; if (dataUser) setUsuarios(dataUser);
@@ -299,6 +304,10 @@ _Gerado pelo SGE_`;
           <div className="flex items-center gap-3 p-3 bg-blue-600 rounded-xl text-white font-medium shadow-lg"><LayoutDashboard size={20} /> <span>Painel</span></div>
           <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
           <Link href="/consumo" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Droplets size={20} /> <span>Hidrômetro</span></Link>
+          
+          {/* BOTÃO FISCALIZAÇÃO (ADICIONADO AQUI) */}
+          <Link href="/fiscalizacoes" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><ClipboardList size={20} /> <span>Fiscalização</span></Link>
+
           {usuarioLogado?.is_admin && <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>}
           <Link href="/apresentacao" className="flex items-center gap-3 p-3 text-yellow-400 hover:text-white hover:bg-yellow-600/20 rounded-xl transition-all border border-dashed border-yellow-600/30 mt-4"><Presentation size={20} /> <span>Apresentação</span></Link>
         </nav>

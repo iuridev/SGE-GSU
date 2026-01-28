@@ -6,7 +6,6 @@ import { cookies } from 'next/headers'
 // --- HELPER: CLIENTE ADMIN ---
 async function getSupabaseAdmin() {
   const cookieStore = await cookies();
-  // Garante o uso da chave de serviço para furar bloqueios de RLS
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
   return createServerClient(
@@ -23,13 +22,12 @@ async function getSupabaseAdmin() {
 }
 
 // ==========================================
-//      NOVA FUNÇÃO: DADOS DO DASHBOARD
+//      DADOS DO DASHBOARD (CENTRALIZADO)
 // ==========================================
-// Resolve o problema de permissão buscando dados via Admin
 export async function getDadosDashboard(userId: string, escolaId: string | null, isRegional: boolean) {
     const admin = await getSupabaseAdmin();
     
-    // 1. DADOS DE ÁGUA (Mês Atual)
+    // 1. ÁGUA (Mês Atual)
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
@@ -39,14 +37,20 @@ export async function getDadosDashboard(userId: string, escolaId: string | null,
         .gte('data_leitura', startOfMonth)
         .lte('data_leitura', endOfMonth);
 
-    // Se NÃO for Regional, filtra pela escola. Se for Regional, traz TUDO.
-    if (!isRegional && escolaId) {
-        queryWater = queryWater.eq('escola_id', escolaId);
-    }
-    
+    if (!isRegional && escolaId) queryWater = queryWater.eq('escola_id', escolaId);
     const { data: waterData } = await queryWater;
 
-    // 2. NOTIFICAÇÕES (Do usuário logado)
+    // 2. ZELADORIAS
+    let queryZel = admin.from('zeladorias').select('*, escolas(nome)').neq('status', 'Arquivado');
+    if (!isRegional && escolaId) queryZel = queryZel.eq('escola_id', escolaId);
+    const { data: zeladorias } = await queryZel;
+
+    // 3. FISCALIZAÇÕES
+    let queryFisc = admin.from('fiscalizacoes_respostas').select('respondido, notificado, escola_id, escolas(nome), fiscalizacoes_eventos(data_referencia)');
+    if (!isRegional && escolaId) queryFisc = queryFisc.eq('escola_id', escolaId);
+    const { data: fiscalizacoes } = await queryFisc;
+
+    // 4. NOTIFICAÇÕES
     const { data: notifs } = await admin
         .from('notificacoes_sistema')
         .select('*')
@@ -56,6 +60,8 @@ export async function getDadosDashboard(userId: string, escolaId: string | null,
 
     return { 
         waterData: waterData || [], 
+        zeladorias: zeladorias || [],
+        fiscalizacoes: fiscalizacoes || [],
         notificacoes: notifs || [] 
     };
 }
@@ -419,6 +425,7 @@ export async function saveConsumoAgua(data: any) {
   } catch (error: any) { return { error: error.message }; }
 }
 
+// CORREÇÃO: Garante que Admins vejam tudo ao filtrar histórico de água
 export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
     const cookieStore = await cookies();
     const authClient = createServerClient(
@@ -432,25 +439,43 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
 
     if (user) {
         const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
+        // Se for Regional, usa o ADMIN client para furar o RLS
         if (profile?.perfil === 'Regional') {
             supabaseClient = await getSupabaseAdmin();
         }
     }
 
-    let query = supabaseClient.from('consumo_agua').select('*, escolas(nome), usuarios(nome)').order('data_leitura', { ascending: false });
+    // Busca dados
+    let query = supabaseClient.from('consumo_agua')
+        .select('*, escolas(nome), usuarios(nome)')
+        .order('data_leitura', { ascending: false });
 
+    // Filtros
     if (escolaId) query = query.eq('escola_id', escolaId);
     if (apenasAlertas) query = query.eq('excedeu_limite', true);
+    
+    // CORREÇÃO DATA: Lógica robusta para mês/ano
     if (mes && ano) {
         const startDate = `${ano}-${mes.padStart(2, '0')}-01`;
-        const nextMonth = Number(mes) === 12 ? 1 : Number(mes) + 1;
-        const nextYear = Number(mes) === 12 ? Number(ano) + 1 : Number(ano);
+        
+        // Calcula o próximo mês corretamente para o 'less than'
+        let nextMonth = Number(mes) + 1;
+        let nextYear = Number(ano);
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextYear = nextYear + 1;
+        }
+        
         const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        
         query = query.gte('data_leitura', startDate).lt('data_leitura', endDate);
     }
 
     const { data, error } = await query;
-    if (error) console.error("Erro histórico:", error);
+    if (error) {
+        console.error("Erro histórico:", error);
+        return [];
+    }
     return data || [];
 }
 
@@ -491,7 +516,7 @@ export async function reportarQuedaEnergia(data: any) {
         timeStyle: 'medium'
     });
 
-    // Notificar Admins
+    // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
     if (!data.resolvido_antecipadamente) {
         const adminClient = await getSupabaseAdmin();
 
