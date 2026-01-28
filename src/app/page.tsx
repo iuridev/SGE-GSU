@@ -200,12 +200,13 @@ export default function Dashboard() {
         });
         setLoadingAction(false);
 
-        if (res.error) {
-            alert(res.error);
+        // CORREÇÃO: Uso de (res as any) para evitar erro de TypeScript
+        if ((res as any).error) {
+            alert((res as any).error);
         } else {
             setShowEnergyModal(false);
             
-            const info = res.dados_mensagem;
+            const info = (res as any).dados_mensagem;
             if (!info) return;
 
             const numeroCentral = "5511999999999"; 
@@ -279,7 +280,7 @@ _Gerado pelo SGE_`;
     if (modalType === 'create') res = await createNewUser(formData);
     if (modalType === 'edit') res = await updateSystemUser(formData.id, formData);
     if (modalType === 'reset') res = await resetUserPassword(formData.id, formData.senha);
-    if (res?.error) alert(res.error);
+    if ((res as any)?.error) alert((res as any).error);
     else { alert('Sucesso!'); setModalType(null); resetForm(); loadDashboardData(usuarioLogado); }
     setLoadingAction(false);
   };
@@ -305,7 +306,14 @@ _Gerado pelo SGE_`;
           <Link href="/zeladorias" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Home size={20} /> <span>Zeladorias</span></Link>
           <Link href="/consumo" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><Droplets size={20} /> <span>Hidrômetro</span></Link>
           
-          {/* BOTÃO FISCALIZAÇÃO (ADICIONADO AQUI) */}
+          {/* BOTÃO RELATÓRIO GERAL (NOVO - Só Admin) */}
+          {usuarioLogado?.is_admin && (
+              <Link href="/consumo/relatorio" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all ml-4 border-l-2 border-slate-700">
+                  <FileDown size={18} /> <span>Relatório Água</span>
+              </Link>
+          )}
+
+          {/* BOTÃO FISCALIZAÇÃO */}
           <Link href="/fiscalizacoes" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><ClipboardList size={20} /> <span>Fiscalização</span></Link>
 
           {usuarioLogado?.is_admin && <Link href="/escolas" className="flex items-center gap-3 p-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all"><School size={20} /> <span>Escolas</span></Link>}

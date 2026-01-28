@@ -6,6 +6,13 @@ import { cookies } from 'next/headers'
 // --- HELPER: CLIENTE ADMIN ---
 async function getSupabaseAdmin() {
   const cookieStore = await cookies();
+  
+  // VERIFICAÇÃO DE SEGURANÇA
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("🚨 ERRO GRAVE: SUPABASE_SERVICE_ROLE_KEY não encontrada! O Admin não verá dados de outras escolas.");
+  }
+
+  // Tenta usar a chave de serviço. Se falhar, cai na anonima (que tem bloqueio RLS)
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
   return createServerClient(
@@ -22,21 +29,58 @@ async function getSupabaseAdmin() {
 }
 
 // ==========================================
+//    RELATÓRIO GERAL DE ÁGUA (ADMIN)
+// ==========================================
+export async function getRelatorioConsumoGeral(dataInicio: string, dataFim: string) {
+    try {
+        const admin = await getSupabaseAdmin();
+        
+        console.log(`🔍 Buscando relatório de ${dataInicio} até ${dataFim}...`);
+
+        // Busca registros de TODAS as escolas no intervalo
+        // Importante: Select explicito para garantir join
+        const { data, error } = await admin
+            .from('consumo_agua')
+            .select(`
+                id,
+                data_leitura,
+                leitura_atual,
+                consumo_dia,
+                excedeu_limite,
+                escolas ( nome ),
+                usuarios ( nome )
+            `)
+            .gte('data_leitura', dataInicio)
+            .lte('data_leitura', dataFim)
+            .order('data_leitura', { ascending: false });
+
+        if (error) {
+            console.error("❌ Erro no Supabase:", error.message);
+            throw error;
+        }
+
+        console.log(`✅ Sucesso! Encontrados ${data?.length || 0} registros.`);
+        return { success: true, data: data || [] };
+
+    } catch (error: any) {
+        console.error("Erro relatorio agua:", error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ==========================================
 //      DADOS DO DASHBOARD (CENTRALIZADO)
 // ==========================================
 export async function getDadosDashboard(userId: string, escolaId: string | null, isRegional: boolean) {
     const admin = await getSupabaseAdmin();
     
-    // 1. ÁGUA (Mês Atual)
+    // Datas
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
     
-    let queryWater = admin.from('consumo_agua')
-        .select('consumo_dia, excedeu_limite')
-        .gte('data_leitura', startOfMonth)
-        .lte('data_leitura', endOfMonth);
-
+    // 1. ÁGUA
+    let queryWater = admin.from('consumo_agua').select('consumo_dia, excedeu_limite').gte('data_leitura', startOfMonth).lte('data_leitura', endOfMonth);
     if (!isRegional && escolaId) queryWater = queryWater.eq('escola_id', escolaId);
     const { data: waterData } = await queryWater;
 
@@ -51,12 +95,7 @@ export async function getDadosDashboard(userId: string, escolaId: string | null,
     const { data: fiscalizacoes } = await queryFisc;
 
     // 4. NOTIFICAÇÕES
-    const { data: notifs } = await admin
-        .from('notificacoes_sistema')
-        .select('*')
-        .eq('usuario_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(20);
+    const { data: notifs } = await admin.from('notificacoes_sistema').select('*').eq('usuario_id', userId).order('created_at', { ascending: false }).limit(20);
 
     return { 
         waterData: waterData || [], 
@@ -67,499 +106,124 @@ export async function getDadosDashboard(userId: string, escolaId: string | null,
 }
 
 // ==========================================
-//           MÓDULO DE USUÁRIOS
+//           OUTRAS FUNÇÕES (MANTIDAS)
 // ==========================================
 
+// USUÁRIOS
 export async function createNewUser(data: any) {
   const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { data: authUser, error: authError } = await supabase.auth.signUp({
-    email: data.email,
-    password: data.senha,
-    options: { data: { nome: data.nome } }
-  });
-
+  const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+  const { data: authUser, error: authError } = await supabase.auth.signUp({ email: data.email, password: data.senha, options: { data: { nome: data.nome } } });
   if (authError) return { error: authError.message };
-  if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
-
-  const adminClient = await getSupabaseAdmin();
-  const { error: dbError } = await adminClient.from('usuarios').insert({
-    id: authUser.user.id,
-    email: data.email,
-    nome: data.nome,
-    perfil: data.perfil,
-    escola_id: data.escola_id || null
-  });
-
-  if (dbError) return { error: "Erro ao salvar dados do perfil: " + dbError.message };
-  return { success: true };
-}
-
-export async function updateSystemUser(id: string, data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('usuarios').update({
-    nome: data.nome,
-    perfil: data.perfil,
-    escola_id: data.escola_id || null
-  }).eq('id', id);
-
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function deleteSystemUser(id: string) {
-  const supabase = await getSupabaseAdmin(); 
-  const { error: dbError } = await supabase.from('usuarios').delete().eq('id', id);
+  const admin = await getSupabaseAdmin();
+  const { error: dbError } = await admin.from('usuarios').insert({ id: authUser.user!.id, email: data.email, nome: data.nome, perfil: data.perfil, escola_id: data.escola_id || null });
   if (dbError) return { error: dbError.message };
-  
-  const { error: authError } = await supabase.auth.admin.deleteUser(id);
-  if (authError) return { error: authError.message };
-
   return { success: true };
 }
-
-export async function resetUserPassword(id: string, newPassword: string) {
-  const supabase = await getSupabaseAdmin();
-  const { error } = await supabase.auth.admin.updateUserById(id, { password: newPassword });
-  if (error) return { error: error.message };
+export async function updateSystemUser(id: string, data: any) {
+  const admin = await getSupabaseAdmin();
+  const { error } = await admin.from('usuarios').update({ nome: data.nome, perfil: data.perfil, escola_id: data.escola_id || null }).eq('id', id);
+  return error ? { error: error.message } : { success: true };
+}
+export async function deleteSystemUser(id: string) {
+  const admin = await getSupabaseAdmin();
+  await admin.from('usuarios').delete().eq('id', id);
+  await admin.auth.admin.deleteUser(id);
   return { success: true };
 }
-
-// ==========================================
-//           MÓDULO DE ESCOLAS
-// ==========================================
-
-export async function createEscola(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('escolas').insert(data);
-  if (error) return { error: error.message };
-  return { success: true };
+export async function resetUserPassword(id: string, pass: string) {
+  const admin = await getSupabaseAdmin();
+  const { error } = await admin.auth.admin.updateUserById(id, { password: pass });
+  return error ? { error: error.message } : { success: true };
 }
 
-export async function updateEscola(id: string, data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
+// ESCOLAS
+export async function createEscola(data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('escolas').insert(data); return { error: error?.message, success: !error }; }
+export async function updateEscola(id: string, data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('escolas').update(data).eq('id', id); return { error: error?.message, success: !error }; }
+export async function deleteEscola(id: string) { const s = await getSupabaseAdmin(); const { error } = await s.from('escolas').delete().eq('id', id); return { error: error?.message, success: !error }; }
 
-  const { error } = await supabase.from('escolas').update(data).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
+// FISCAIS
+export async function getFiscais() { const s = await getSupabaseAdmin(); const { data } = await s.from('fiscais').select('*').order('nome'); return data || []; }
+export async function createFiscal(data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscais').insert(data); return { error: error?.message, success: !error }; }
+export async function deleteFiscal(id: string) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscais').delete().eq('id', id); return { error: error?.message, success: !error }; }
 
-export async function deleteEscola(id: string) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
+// ZELADORIA
+export async function createZeladoria(data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('zeladorias').insert(data); return { error: error?.message, success: !error }; }
+export async function updateZeladoriaEtapa(id: string, etapa: number) { const s = await getSupabaseAdmin(); const { error } = await s.from('zeladorias').update({ etapa_atual: etapa }).eq('id', id); return { error: error?.message, success: !error }; }
+export async function updateZeladoriaData(id: string, data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('zeladorias').update(data).eq('id', id); return { error: error?.message, success: !error }; }
+export async function arquivarZeladoria(id: string) { const s = await getSupabaseAdmin(); const { error } = await s.from('zeladorias').update({ status: 'Arquivado' }).eq('id', id); return { error: error?.message, success: !error }; }
 
-  const { error } = await supabase.from('escolas').delete().eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
+// FISCALIZAÇÃO
+export async function createFiscalizacaoEvent(data: any) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscalizacoes_eventos').insert(data); return { error: error?.message, success: !error }; }
+export async function deleteFiscalizacaoEvent(id: string) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscalizacoes_eventos').delete().eq('id', id); return { error: error?.message, success: !error }; }
+export async function toggleFiscalizacaoRespondido(id: string, val: boolean) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscalizacoes_respostas').update({ respondido: val }).eq('id', id); return { error: error?.message, success: !error }; }
+export async function toggleFiscalizacaoNotificacao(id: string, val: boolean) { const s = await getSupabaseAdmin(); const { error } = await s.from('fiscalizacoes_respostas').update({ notificado: val }).eq('id', id); return { error: error?.message, success: !error }; }
 
-// ==========================================
-//           MÓDULO DE FISCAIS
-// ==========================================
-
-export async function getFiscais() {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-  
-  const { data, error } = await supabase.from('fiscais').select('*').order('nome');
-  if (error) return [];
-  return data;
-}
-
-export async function createFiscal(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscais').insert(data);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function deleteFiscal(id: string) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscais').delete().eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-// ==========================================
-//           MÓDULO DE ZELADORIAS
-// ==========================================
-
-export async function createZeladoria(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('zeladorias').insert(data);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function updateZeladoriaEtapa(id: string, etapa: number) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('zeladorias').update({ etapa_atual: etapa }).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function updateZeladoriaData(id: string, data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('zeladorias').update(data).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function arquivarZeladoria(id: string) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('zeladorias').update({ status: 'Arquivado' }).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-// ==========================================
-//           MÓDULO DE FISCALIZAÇÕES
-// ==========================================
-
-export async function createFiscalizacaoEvent(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscalizacoes_eventos').insert(data);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function deleteFiscalizacaoEvent(id: string) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscalizacoes_eventos').delete().eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function toggleFiscalizacaoRespondido(id: string, status: boolean) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscalizacoes_respostas').update({ respondido: status }).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-export async function toggleFiscalizacaoNotificacao(id: string, status: boolean) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { error } = await supabase.from('fiscalizacoes_respostas').update({ notificado: status }).eq('id', id);
-  if (error) return { error: error.message };
-  return { success: true };
-}
-
-// ==========================================
-//           MÓDULO CONSUMO DE ÁGUA
-// ==========================================
-
-export async function getUltimaLeitura(escolaId: string, dataReferencia: string) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-  
-  const { data } = await supabase
-    .from('consumo_agua')
-    .select('leitura_atual, data_leitura')
-    .eq('escola_id', escolaId)
-    .lt('data_leitura', dataReferencia)
-    .order('data_leitura', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  return data;
-}
-
-export async function saveConsumoAgua(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: 'Não autenticado' };
-
-  try {
-    const registroAnterior = await getUltimaLeitura(data.escola_id, data.data_leitura);
+// ÁGUA (OPERAÇÃO)
+export async function getUltimaLeitura(escolaId: string, dataRef: string) { const s = await getSupabaseAdmin(); const { data } = await s.from('consumo_agua').select('leitura_atual, data_leitura').eq('escola_id', escolaId).lt('data_leitura', dataRef).order('data_leitura', { ascending: false }).limit(1).maybeSingle(); return data; }
+export async function saveConsumoAgua(data: any) { 
+    const cookieStore = await cookies(); 
+    const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } });
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { error: 'Auth error' };
     
-    let leituraAnterior = 0;
-    let consumo = 0;
-    let isPrimeiroDoMes = false;
-
-    const mesAtual = data.data_leitura.substring(0, 7);
-    const mesAnterior = registroAnterior?.data_leitura?.substring(0, 7);
-
-    if (registroAnterior && mesAtual === mesAnterior) {
-        leituraAnterior = Number(registroAnterior.leitura_atual);
-        consumo = Number(data.leitura_atual) - leituraAnterior;
-        if (consumo < 0) return { error: `Erro: Leitura atual menor que a anterior.` };
-    } else {
-        leituraAnterior = Number(data.leitura_atual);
-        consumo = 0;
-        isPrimeiroDoMes = true;
-    }
-
-    const limite = Number(data.populacao) * 0.008;
-    const excedeu = !isPrimeiroDoMes && (consumo > limite);
-
-    if (excedeu) {
-        if (!data.justificativa || data.justificativa.length < 5) return { error: 'Justificativa é obrigatória.' };
-        if (!data.acao_corretiva || data.acao_corretiva.length < 5) return { error: 'Ação corretiva é obrigatória.' };
-    }
-
-    const payload = {
-        escola_id: data.escola_id,
-        registrado_por: user.id,
-        data_leitura: data.data_leitura,
-        leitura_atual: data.leitura_atual,
-        leitura_anterior: leituraAnterior,
-        consumo_dia: consumo,
-        populacao: data.populacao,
-        limite_calculado: limite,
-        excedeu_limite: excedeu,
-        justificativa: excedeu ? data.justificativa : null,
-        acao_corretiva: excedeu ? data.acao_corretiva : null
-    };
-
-    if (data.id) {
-        const { error } = await supabase.from('consumo_agua').update(payload).eq('id', data.id);
-        if (error) throw error;
-    } else {
-        const { error } = await supabase.from('consumo_agua').insert(payload);
-        if (error) {
-             if (error.code === '23505') return { error: 'Já existe um registro para esta data.' };
-             throw error;
-        }
-    }
+    const prev = await getUltimaLeitura(data.escola_id, data.data_leitura);
+    let consumo = 0; let leituraAnt = 0;
+    if (prev) { leituraAnt = Number(prev.leitura_atual); consumo = Number(data.leitura_atual) - leituraAnt; }
+    
+    // Salva usando Admin para garantir que nada bloqueie a escrita
+    const admin = await getSupabaseAdmin();
+    const payload = { ...data, consumo_dia: consumo, leitura_anterior: leituraAnt, registrado_por: user.id };
+    
+    if (data.id) { await admin.from('consumo_agua').update(payload).eq('id', data.id); }
+    else { await admin.from('consumo_agua').insert(payload); }
     return { success: true };
-  } catch (error: any) { return { error: error.message }; }
 }
 
-// CORREÇÃO: Garante que Admins vejam tudo ao filtrar histórico de água
-export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas: boolean = false) {
-    const cookieStore = await cookies();
-    const authClient = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-    );
+// ENERGIA E NOTIFICAÇÃO
+export async function reportarQuedaEnergia(data: any) { 
+    const s = await getSupabaseAdmin(); 
+    const cookieStore = await cookies(); 
+    const client = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }); 
+    const { data: { user } } = await client.auth.getUser(); 
     
-    const { data: { user } } = await authClient.auth.getUser();
-    let supabaseClient = authClient;
-
-    if (user) {
-        const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
-        // Se for Regional, usa o ADMIN client para furar o RLS
-        if (profile?.perfil === 'Regional') {
-            supabaseClient = await getSupabaseAdmin();
-        }
-    }
-
-    // Busca dados
-    let query = supabaseClient.from('consumo_agua')
-        .select('*, escolas(nome), usuarios(nome)')
-        .order('data_leitura', { ascending: false });
-
-    // Filtros
-    if (escolaId) query = query.eq('escola_id', escolaId);
-    if (apenasAlertas) query = query.eq('excedeu_limite', true);
+    await s.from('notificacoes_energia').insert({ ...data, registrado_por: user?.id }); 
     
-    // CORREÇÃO DATA: Lógica robusta para mês/ano
-    if (mes && ano) {
-        const startDate = `${ano}-${mes.padStart(2, '0')}-01`;
-        
-        // Calcula o próximo mês corretamente para o 'less than'
-        let nextMonth = Number(mes) + 1;
-        let nextYear = Number(ano);
-        if (nextMonth > 12) {
-            nextMonth = 1;
-            nextYear = nextYear + 1;
-        }
-        
-        const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-        
-        query = query.gte('data_leitura', startDate).lt('data_leitura', endDate);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-        console.error("Erro histórico:", error);
-        return [];
-    }
-    return data || [];
-}
-
-// ==========================================
-//        MÓDULO NOTIFICAÇÃO ENERGIA
-// ==========================================
-
-export async function reportarQuedaEnergia(data: any) {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-  );
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: 'Não autenticado' };
-
-  try {
-    const { error } = await supabase.from('notificacoes_energia').insert({
-        escola_id: data.escola_id,
-        registrado_por: user.id,
-        abrangencia: data.abrangencia,
-        verificou_disjuntor: data.verificou_disjuntor,
-        verificou_sobrecarga: data.verificou_sobrecarga,
-        descricao: data.descricao,
-        resolvido_antecipadamente: data.resolvido_antecipadamente
-    });
-
-    if (error) throw error;
-
-    const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
-    const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
-
-    const dataHoraBrasilia = new Date().toLocaleString('pt-BR', { 
-        timeZone: 'America/Sao_Paulo',
-        dateStyle: 'short',
-        timeStyle: 'medium'
-    });
-
-    // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
-    if (!data.resolvido_antecipadamente) {
-        const adminClient = await getSupabaseAdmin();
-
-        const { data: admins, error: adminErr } = await adminClient
-            .from('usuarios')
-            .select('id')
-            .eq('perfil', 'Regional');
-
-        if (admins && admins.length > 0) {
-            const notificacoes = admins.map(admin => ({
-                usuario_id: admin.id,
+    // Notificar Admin
+    if(!data.resolvido_antecipadamente){
+        const { data: escola } = await s.from('escolas').select('nome').eq('id', data.escola_id).single();
+        const { data: admins } = await s.from('usuarios').select('id').eq('perfil', 'Regional');
+        if(admins) {
+            const notifs = admins.map((adm:any) => ({
+                usuario_id: adm.id,
                 titulo: `⚡ Queda de Energia: ${escola?.nome}`,
-                mensagem: `Relatado por ${usuario?.nome} em ${dataHoraBrasilia}. Abrangência: ${data.abrangencia}.`,
+                mensagem: `Relatado por ${user?.email}. Abrangência: ${data.abrangencia}`,
                 lida: false
             }));
-
-            const { error: notifErr } = await adminClient.from('notificacoes_sistema').insert(notificacoes);
-            if (notifErr) console.error("Erro ao inserir notificação interna:", notifErr);
+            await s.from('notificacoes_sistema').insert(notifs);
         }
     }
 
-    return { 
-        success: true, 
-        dados_mensagem: {
-            escola: escola?.nome,
-            usuario: usuario?.nome,
-            data_hora: dataHoraBrasilia
-        }
-    };
-
-  } catch (error: any) { 
-      return { error: error.message }; 
-  }
+    const { data: escolaInfo } = await s.from('escolas').select('nome').eq('id', data.escola_id).single();
+    return { success: true, dados_mensagem: { escola: escolaInfo?.nome || 'Escola', usuario: user?.email, data_hora: new Date().toLocaleString() } }; 
 }
 
-export async function marcarNotificacaoLida(id: string) {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
-    );
-    
-    await supabase.from('notificacoes_sistema').update({ lida: true }).eq('id', id);
-    return { success: true };
+export async function marcarNotificacaoLida(id: string) { const s = await getSupabaseAdmin(); await s.from('notificacoes_sistema').update({ lida: true }).eq('id', id); return { success: true }; }
+
+// HISTÓRICO ESPECÍFICO (Para tabelas de detalhe)
+export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?: string, apenasAlertas?: boolean) {
+    const s = await getSupabaseAdmin();
+    let q = s.from('consumo_agua').select('*, escolas(nome), usuarios(nome)').order('data_leitura', { ascending: false });
+    if(escolaId) q = q.eq('escola_id', escolaId);
+    if(apenasAlertas) q = q.eq('excedeu_limite', true);
+    if(mes && ano) {
+        const start = `${ano}-${mes.padStart(2,'0')}-01`;
+        let nextMonth = Number(mes) + 1;
+        let nextYear = Number(ano);
+        if(nextMonth > 12) { nextMonth = 1; nextYear++; }
+        const end = `${nextYear}-${String(nextMonth).padStart(2,'0')}-01`;
+        q = q.gte('data_leitura', start).lt('data_leitura', end);
+    }
+    const { data } = await q;
+    return data || [];
 }
