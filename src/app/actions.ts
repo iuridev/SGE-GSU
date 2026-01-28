@@ -3,6 +3,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { Resend } from 'resend';
 
 // --- FUNÇÃO AUXILIAR DE ADMINISTRAÇÃO ---
 function getSupabaseAdmin() {
@@ -578,4 +579,53 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
         return [];
     }
     return data;
+}
+
+// ==========================================
+//    MÓDULO NOTIFICAÇÃO ENERGIA (LIMPO)
+// ==========================================
+
+export async function reportarQuedaEnergia(data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado' };
+
+  try {
+    // 1. Salvar no Banco de Dados (Isso garante o registro oficial)
+    const { error } = await supabase.from('notificacoes_energia').insert({
+        escola_id: data.escola_id,
+        registrado_por: user.id,
+        abrangencia: data.abrangencia,
+        verificou_disjuntor: data.verificou_disjuntor,
+        verificou_sobrecarga: data.verificou_sobrecarga,
+        descricao: data.descricao,
+        resolvido_antecipadamente: data.resolvido_antecipadamente
+    });
+
+    if (error) throw error;
+
+    // 2. Retorna dados úteis para o Front-end montar a mensagem do WhatsApp
+    // Buscamos o nome da escola e do usuário para enriquecer a mensagem
+    const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
+    const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
+
+    return { 
+        success: true, 
+        dados_mensagem: {
+            escola: escola?.nome,
+            usuario: usuario?.nome,
+            data_hora: new Date().toLocaleString('pt-BR')
+        }
+    };
+
+  } catch (error: any) { 
+      console.error("Erro ao salvar notificação:", error);
+      return { error: error.message }; 
+  }
 }
