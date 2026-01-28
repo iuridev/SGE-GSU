@@ -4,12 +4,9 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
 // --- HELPER: CLIENTE ADMIN ---
-// Usa a biblioteca @supabase/ssr que já está instalada, mas com a chave de serviço
+// Permite que o sistema execute ações privilegiadas (como notificar Admins)
 async function getSupabaseAdmin() {
   const cookieStore = await cookies();
-  
-  // Tenta pegar a chave de serviço (Service Role) ou usa a anônima
-  // No Vercel, certifique-se de configurar SUPABASE_SERVICE_ROLE_KEY nas variáveis de ambiente
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
   return createServerClient(
@@ -18,7 +15,7 @@ async function getSupabaseAdmin() {
     {
       cookies: {
         get(name: string) { return cookieStore.get(name)?.value },
-        set(name: string, value: string, options: any) { }, // Admin não precisa salvar cookies
+        set(name: string, value: string, options: any) { },
         remove(name: string, options: any) { },
       },
     }
@@ -37,7 +34,6 @@ export async function createNewUser(data: any) {
     { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
   );
 
-  // 1. Criar Auth User
   const { data: authUser, error: authError } = await supabase.auth.signUp({
     email: data.email,
     password: data.senha,
@@ -47,9 +43,7 @@ export async function createNewUser(data: any) {
   if (authError) return { error: authError.message };
   if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
 
-  // 2. Criar Registro na Tabela 'usuarios'
   const adminClient = await getSupabaseAdmin();
-  
   const { error: dbError } = await adminClient.from('usuarios').insert({
     id: authUser.user.id,
     email: data.email,
@@ -58,10 +52,7 @@ export async function createNewUser(data: any) {
     escola_id: data.escola_id || null
   });
 
-  if (dbError) {
-    return { error: "Erro ao salvar dados do perfil: " + dbError.message };
-  }
-
+  if (dbError) return { error: "Erro ao salvar dados do perfil: " + dbError.message };
   return { success: true };
 }
 
@@ -85,12 +76,9 @@ export async function updateSystemUser(id: string, data: any) {
 
 export async function deleteSystemUser(id: string) {
   const supabase = await getSupabaseAdmin(); 
-  
-  // 1. Remover da tabela usuarios
   const { error: dbError } = await supabase.from('usuarios').delete().eq('id', id);
   if (dbError) return { error: dbError.message };
-
-  // 2. Remover do Auth
+  
   const { error: authError } = await supabase.auth.admin.deleteUser(id);
   if (authError) return { error: authError.message };
 
@@ -100,6 +88,204 @@ export async function deleteSystemUser(id: string) {
 export async function resetUserPassword(id: string, newPassword: string) {
   const supabase = await getSupabaseAdmin();
   const { error } = await supabase.auth.admin.updateUserById(id, { password: newPassword });
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+// ==========================================
+//           MÓDULO DE ESCOLAS
+// ==========================================
+
+export async function createEscola(data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('escolas').insert(data);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function updateEscola(id: string, data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('escolas').update(data).eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteEscola(id: string) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('escolas').delete().eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+// ==========================================
+//           MÓDULO DE FISCAIS
+// ==========================================
+
+export async function getFiscais() {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+  
+  const { data, error } = await supabase.from('fiscais').select('*').order('nome');
+  if (error) return [];
+  return data;
+}
+
+export async function createFiscal(data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscais').insert(data);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteFiscal(id: string) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscais').delete().eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+// ==========================================
+//           MÓDULO DE ZELADORIAS
+// ==========================================
+
+export async function createZeladoria(data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('zeladorias').insert(data);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function updateZeladoriaEtapa(id: string, etapa: number) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('zeladorias').update({ etapa_atual: etapa }).eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function updateZeladoriaData(id: string, data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('zeladorias').update(data).eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function arquivarZeladoria(id: string) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('zeladorias').update({ status: 'Arquivado' }).eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+// ==========================================
+//           MÓDULO DE FISCALIZAÇÕES
+// ==========================================
+
+export async function createFiscalizacaoEvent(data: any) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscalizacoes_eventos').insert(data);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteFiscalizacaoEvent(id: string) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscalizacoes_eventos').delete().eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function toggleFiscalizacaoRespondido(id: string, status: boolean) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscalizacoes_respostas').update({ respondido: status }).eq('id', id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function toggleFiscalizacaoNotificacao(id: string, status: boolean) {
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { get(name: string) { return cookieStore.get(name)?.value } } }
+  );
+
+  const { error } = await supabase.from('fiscalizacoes_respostas').update({ notificado: status }).eq('id', id);
   if (error) return { error: error.message };
   return { success: true };
 }
@@ -209,7 +395,7 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
     if (user) {
         const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
         if (profile?.perfil === 'Regional') {
-            supabaseClient = await getSupabaseAdmin(); 
+            supabaseClient = await getSupabaseAdmin();
         }
     }
 
@@ -246,7 +432,7 @@ export async function reportarQuedaEnergia(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Salvar na Tabela de Energia
+    // 1. Salvar na Tabela de Energia (Registro Oficial)
     const { error } = await supabase.from('notificacoes_energia').insert({
         escola_id: data.escola_id,
         registrado_por: user.id,
@@ -259,9 +445,11 @@ export async function reportarQuedaEnergia(data: any) {
 
     if (error) throw error;
 
+    // Buscar dados para enriquecer as mensagens
     const { data: escola } = await supabase.from('escolas').select('nome').eq('id', data.escola_id).single();
     const { data: usuario } = await supabase.from('usuarios').select('nome').eq('id', user.id).single();
 
+    // Data formatada no fuso de Brasília
     const dataHoraBrasilia = new Date().toLocaleString('pt-BR', { 
         timeZone: 'America/Sao_Paulo',
         dateStyle: 'short',
@@ -270,7 +458,6 @@ export async function reportarQuedaEnergia(data: any) {
 
     // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
     if (!data.resolvido_antecipadamente) {
-        // Usar o cliente Admin criado via @supabase/ssr
         const adminClient = await getSupabaseAdmin();
 
         const { data: admins, error: adminErr } = await adminClient
