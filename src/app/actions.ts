@@ -3,12 +3,13 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
-// --- HELPER: CLIENTE ADMIN (Usando apenas @supabase/ssr) ---
-// Isso evita o erro de "Module not found: @supabase/supabase-js"
-const getSupabaseAdmin = async () => {
+// --- HELPER: CLIENTE ADMIN ---
+// Usa a biblioteca @supabase/ssr que já está instalada, mas com a chave de serviço
+async function getSupabaseAdmin() {
   const cookieStore = await cookies();
   
-  // Tenta usar a chave de serviço do ambiente, se não tiver, usa a anônima
+  // Tenta pegar a chave de serviço (Service Role) ou usa a anônima
+  // No Vercel, certifique-se de configurar SUPABASE_SERVICE_ROLE_KEY nas variáveis de ambiente
   const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
   return createServerClient(
@@ -17,8 +18,7 @@ const getSupabaseAdmin = async () => {
     {
       cookies: {
         get(name: string) { return cookieStore.get(name)?.value },
-        // Admin não precisa setar cookies, apenas ler/escrever dados
-        set(name: string, value: string, options: any) { },
+        set(name: string, value: string, options: any) { }, // Admin não precisa salvar cookies
         remove(name: string, options: any) { },
       },
     }
@@ -48,7 +48,6 @@ export async function createNewUser(data: any) {
   if (!authUser.user) return { error: "Erro ao criar usuário de autenticação." };
 
   // 2. Criar Registro na Tabela 'usuarios'
-  // Usamos adminClient para evitar bloqueio de RLS
   const adminClient = await getSupabaseAdmin();
   
   const { error: dbError } = await adminClient.from('usuarios').insert({
@@ -210,8 +209,7 @@ export async function getConsumoHistorico(escolaId?: string, mes?: string, ano?:
     if (user) {
         const { data: profile } = await authClient.from('usuarios').select('perfil').eq('id', user.id).single();
         if (profile?.perfil === 'Regional') {
-            // Se for admin, usa o cliente admin para ver tudo
-            supabaseClient = await getSupabaseAdmin();
+            supabaseClient = await getSupabaseAdmin(); 
         }
     }
 
@@ -248,7 +246,7 @@ export async function reportarQuedaEnergia(data: any) {
   if (!user) return { error: 'Não autenticado' };
 
   try {
-    // 1. Salvar na Tabela de Energia (Registro Oficial)
+    // 1. Salvar na Tabela de Energia
     const { error } = await supabase.from('notificacoes_energia').insert({
         escola_id: data.escola_id,
         registrado_por: user.id,
@@ -272,6 +270,7 @@ export async function reportarQuedaEnergia(data: any) {
 
     // 2. DISPARAR NOTIFICAÇÃO PARA ADMINS (SISTEMA)
     if (!data.resolvido_antecipadamente) {
+        // Usar o cliente Admin criado via @supabase/ssr
         const adminClient = await getSupabaseAdmin();
 
         const { data: admins, error: adminErr } = await adminClient
