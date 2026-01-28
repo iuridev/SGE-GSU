@@ -218,7 +218,7 @@ export default function Dashboard() {
             const info = res.dados_mensagem;
             if (!info) return;
 
-            const numeroCentral = "5511999999999"; // ALTERAR PARA O NÚMERO CORRETO
+            const numeroCentral = "551124422286"; // ALTERAR PARA O NÚMERO CORRETO
             
             const textoMensagem = 
 `*🚨 ALERTA: Queda de Energia - SGE*
